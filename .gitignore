@@ -1,0 +1,52 @@
+# Node / Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs (react-native-builder-bob)
+lib/
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Android
+android/.gradle/
+android/build/
+android/.cxx/
+.gradle/
+build/
+local.properties
+*.iml
+*.hprof
+.kotlin/
+*.keystore
+!debug.keystore
+
+# iOS / Xcode
+ios/build/
+ios/Pods/
+**/Pods/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/
+**/.xcode.env.local
+
+# Metro & Bundles
+*.jsbundle
+.metro-health-check*
+
+# Testing & Coverage
+coverage/
+
+# IDEs
+.idea/
+.vscode/
+
+# Expo / Temporary
+.expo/
+.cache/
+

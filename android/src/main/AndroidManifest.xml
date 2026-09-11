@@ -1,0 +1,44 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools">
+  <!--
+    No storage permissions are declared on purpose.
+
+    ACTION_PICK_IMAGES (API 33+) and ACTION_OPEN_DOCUMENT (the fallback) both
+    hand back a URI the app is already granted access to, so READ_EXTERNAL_STORAGE
+    and READ_MEDIA_IMAGES are not needed. Adding them would only trigger Play
+    Store photo-and-video-permissions declarations for no benefit.
+  -->
+
+  <application>
+    <!--
+      ACTION_IMAGE_CAPTURE and ACTION_VIDEO_CAPTURE write to a URI the caller
+      supplies, and handing a camera app a file:// URI throws
+      FileUriExposureException on API 24+. The authority is namespaced with
+      ${applicationId} so it cannot collide with the host app's own provider,
+      and the merger wires it up without the app touching its manifest.
+    -->
+    <provider
+      android:name="androidx.core.content.FileProvider"
+      android:authorities="${applicationId}.mediapickerprovider"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/rn_media_picker_paths" />
+    </provider>
+
+    <!--
+      The cropper library declares CropImageActivity without android:theme, so
+      it inherits the host app's theme. React Native's default app theme is
+      Theme.AppCompat.DayNight.NoActionBar, and CropImageActivity puts its
+      Done/Cancel actions in the options menu, which an ActionBar has to host.
+      Inheriting NoActionBar therefore renders a cropper with no way to confirm
+      the crop. Pinning a theme that has an ActionBar here keeps the fix inside
+      this library instead of asking every consuming app to patch its theme.
+    -->
+    <activity
+      android:name="com.canhub.cropper.CropImageActivity"
+      android:theme="@style/Theme.AppCompat.DayNight.DarkActionBar"
+      tools:replace="android:theme" />
+  </application>
+</manifest>

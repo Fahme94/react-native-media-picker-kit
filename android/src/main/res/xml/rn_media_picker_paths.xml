@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Scoped to the single cache subdirectory this module owns, so the shared
+  FileProvider authority can never hand out a URI to anything else in the app.
+-->
+<paths>
+  <cache-path name="rn_media_picker" path="rn_media_picker/" />
+</paths>

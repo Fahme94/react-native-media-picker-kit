@@ -1,0 +1,58 @@
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.6.0"
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21"
+  }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+apply plugin: "com.facebook.react"
+
+def getExt(name, fallback) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback
+}
+
+android {
+  namespace "com.mediapicker"
+  compileSdk getExt("compileSdkVersion", 35)
+
+  defaultConfig {
+    // 24 is the floor for the AndroidX backported photo picker path.
+    minSdk getExt("minSdkVersion", 24)
+    targetSdk getExt("targetSdkVersion", 35)
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
+  kotlinOptions {
+    jvmTarget = "17"
+  }
+}
+
+repositories {
+  google()
+  mavenCentral()
+}
+
+dependencies {
+  implementation "com.facebook.react:react-android"
+
+  // Required for ActivityResultContracts.PickVisualMedia and the backported
+  // photo picker on devices below API 30.
+  implementation "androidx.activity:activity-ktx:1.9.3"
+  implementation "androidx.exifinterface:exifinterface:1.3.7"
+
+  // CanHub/vanniktech cropper. Chosen over Yalantis uCrop deliberately: uCrop
+  // ships on JitPack, which forces every consuming app to add the JitPack repo
+  // to its root build.gradle. This one is on Maven Central, so installing the
+  // package is just `yarn add`.
+  implementation "com.vanniktech:android-image-cropper:4.6.0"
+}
