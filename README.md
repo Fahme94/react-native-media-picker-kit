@@ -3,7 +3,8 @@
 Pick photos and videos in React Native — from the gallery **without asking for a single runtime permission**, straight from the camera, or cropped in the same call. Built as a TurboModule for the New Architecture.
 
 [![npm version](https://img.shields.io/npm/v/react-native-media-picker-kit.svg)](https://www.npmjs.com/package/react-native-media-picker-kit)
-[![npm downloads](https://img.shields.io/npm/dm/react-native-media-picker-kit.svg)](https://www.npmjs.com/package/react-native-media-picker-kit)
+[![types](https://img.shields.io/npm/types/react-native-media-picker-kit.svg)](src/types.ts)
+[![install size](https://img.shields.io/npm/unpacked-size/react-native-media-picker-kit.svg)](https://www.npmjs.com/package/react-native-media-picker-kit)
 [![license](https://img.shields.io/npm/l/react-native-media-picker-kit.svg)](./LICENSE)
 ![platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-lightgrey)
 ![New Architecture](https://img.shields.io/badge/New%20Architecture-required-F0A93B)
@@ -52,10 +53,19 @@ React Native **0.79+** with the New Architecture enabled (`newArchEnabled=true`)
 
 ```sh
 npm install react-native-media-picker-kit
+# or: yarn add react-native-media-picker-kit
+
 cd ios && pod install
 ```
 
-Expo projects need a development build — see [Expo](docs/expo.md).
+In an Expo project, install it and prebuild — the config plugin writes the iOS keys for you:
+
+```sh
+npx expo install react-native-media-picker-kit
+npx expo prebuild
+```
+
+Expo Go cannot load this module; you need a development build. See [Expo](docs/expo.md).
 
 ### Pick from the gallery
 
