@@ -15,7 +15,7 @@ import {
   pickMedia,
   type PickerOptions,
   type PickerResult,
-} from 'react-native-media-picker';
+} from 'react-native-media-picker-kit';
 
 type Case = {label: string; options: PickerOptions; capture?: boolean};
 

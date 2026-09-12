@@ -1,10 +1,10 @@
-# react-native-media-picker
+# react-native-media-picker-kit
 
 Pick photos and videos in React Native — from the gallery **without asking for a single runtime permission**, straight from the camera, or cropped in the same call. Built as a TurboModule for the New Architecture.
 
-[![npm version](https://img.shields.io/npm/v/react-native-media-picker.svg)](https://www.npmjs.com/package/react-native-media-picker)
-[![npm downloads](https://img.shields.io/npm/dm/react-native-media-picker.svg)](https://www.npmjs.com/package/react-native-media-picker)
-[![license](https://img.shields.io/npm/l/react-native-media-picker.svg)](./LICENSE)
+[![npm version](https://img.shields.io/npm/v/react-native-media-picker-kit.svg)](https://www.npmjs.com/package/react-native-media-picker-kit)
+[![npm downloads](https://img.shields.io/npm/dm/react-native-media-picker-kit.svg)](https://www.npmjs.com/package/react-native-media-picker-kit)
+[![license](https://img.shields.io/npm/l/react-native-media-picker-kit.svg)](./LICENSE)
 ![platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-lightgrey)
 ![New Architecture](https://img.shields.io/badge/New%20Architecture-required-F0A93B)
 
@@ -28,7 +28,7 @@ Pick photos and videos in React Native — from the gallery **without asking for
 
 The option and result shapes are a merge of the two libraries most people reach for, with the inconsistencies between them resolved.
 
-| | react-native-media-picker | react-native-image-picker | react-native-image-crop-picker |
+| | react-native-media-picker-kit | react-native-image-picker | react-native-image-crop-picker |
 | --- | --- | --- | --- |
 | Cropping | Built in — `cropping: true` on a pick or a capture | Not supported | Built in |
 | Cancelling | Resolves with `didCancel: true` | Resolves with `didCancel: true` | **Rejects** — every call site needs a `catch` that string-matches the cancel code |
@@ -51,7 +51,7 @@ React Native **0.79+** with the New Architecture enabled (`newArchEnabled=true`)
 ### Install
 
 ```sh
-npm install react-native-media-picker
+npm install react-native-media-picker-kit
 cd ios && pod install
 ```
 
@@ -60,7 +60,7 @@ Expo projects need a development build — see [Expo](docs/expo.md).
 ### Pick from the gallery
 
 ```ts
-import { pickMedia } from 'react-native-media-picker';
+import { pickMedia } from 'react-native-media-picker-kit';
 
 const result = await pickMedia({
   mediaType: 'photo',    // 'photo' | 'video' | 'mixed'
@@ -83,7 +83,7 @@ No permission request, no `Info.plist` key, no manifest entry — the system pic
 ### Shoot with the camera
 
 ```ts
-import { captureMedia } from 'react-native-media-picker';
+import { captureMedia } from 'react-native-media-picker-kit';
 
 const photo = await captureMedia({ mediaType: 'photo', cameraType: 'back' });
 

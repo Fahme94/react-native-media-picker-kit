@@ -27,7 +27,7 @@ to keep.
 ## Cleaning up
 
 ```ts
-import { cleanTempFiles } from 'react-native-media-picker';
+import { cleanTempFiles } from 'react-native-media-picker-kit';
 
 await cleanTempFiles();           // everything this library wrote
 await cleanTempFiles(asset.uri);  // just one asset

@@ -20,7 +20,7 @@ Add it to `app.json` and you are done. It writes the iOS `Info.plist` keys; Andr
 ```json
 {
   "expo": {
-    "plugins": ["react-native-media-picker"]
+    "plugins": ["react-native-media-picker-kit"]
   }
 }
 ```
@@ -41,7 +41,7 @@ Pass your own copy, which is what the App Store review actually reads:
 {
   "expo": {
     "plugins": [
-      ["react-native-media-picker", {
+      ["react-native-media-picker-kit", {
         "cameraPermission": "Take a photo or video to attach.",
         "microphonePermission": "Record audio with your video.",
         "photoLibraryPermission": "Attach a photo from your library."
@@ -55,7 +55,7 @@ Pass `false` to **remove** a key for a feature you do not use. If your app never
 have no business asking for the microphone:
 
 ```json
-["react-native-media-picker", { "microphonePermission": false }]
+["react-native-media-picker-kit", { "microphonePermission": false }]
 ```
 
 Precedence is: a string you pass to the plugin wins, then whatever is already in your own

@@ -9,7 +9,7 @@ import {
   captureMedia,
   cropImage,
   cleanTempFiles,
-} from 'react-native-media-picker';
+} from 'react-native-media-picker-kit';
 ```
 
 ## Functions
