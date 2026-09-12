@@ -7,7 +7,7 @@ Pod::Spec.new do |s|
   s.version      = package["version"]
   s.summary      = package["description"]
   s.license      = package["license"]
-  s.authors      = { "Ahmed Fahmy" => "89461941+AhmedFahmeee@users.noreply.github.com" }
+  s.authors      = { "Ahmed Fahmy" => "13001300+Fahme94@users.noreply.github.com" }
   s.homepage     = "https://github.com/Fahme94/react-native-media-picker"
   s.platforms    = { :ios => "15.1" }
   s.source       = { :git => "https://github.com/Fahme94/react-native-media-picker.git", :tag => "v#{s.version}" }

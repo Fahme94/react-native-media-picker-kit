@@ -10,7 +10,7 @@
     "type": "git",
     "url": "git+https://github.com/Fahme94/react-native-media-picker.git"
   },
-  "author": "Ahmed Fahmy <89461941+AhmedFahmeee@users.noreply.github.com>",
+  "author": "Ahmed Fahmy <13001300+Fahme94@users.noreply.github.com>",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
   "types": "lib/typescript/index.d.ts",
