@@ -2,13 +2,13 @@
   "name": "react-native-media-picker",
   "version": "0.1.0",
   "description": "Pick or capture images (with cropping) and videos. New Architecture only.",
-  "homepage": "https://github.com/AhmedFahmeee/react-native-media-picker#readme",
+  "homepage": "https://github.com/Fahme94/react-native-media-picker#readme",
   "bugs": {
-    "url": "https://github.com/AhmedFahmeee/react-native-media-picker/issues"
+    "url": "https://github.com/Fahme94/react-native-media-picker/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AhmedFahmeee/react-native-media-picker.git"
+    "url": "git+https://github.com/Fahme94/react-native-media-picker.git"
   },
   "author": "Ahmed Fahmy <89461941+AhmedFahmeee@users.noreply.github.com>",
   "main": "lib/commonjs/index.js",
