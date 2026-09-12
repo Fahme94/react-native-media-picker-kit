@@ -40,7 +40,30 @@ const CASES: Case[] = [
     capture: true,
   },
   {label: 'Capture mixed (invalid)', options: {mediaType: 'mixed'}, capture: true},
+  {
+    label: 'Photo +b64 +exif +extra',
+    options: {
+      mediaType: 'photo',
+      includeBase64: true,
+      includeExif: true,
+      includeExtra: true,
+    },
+  },
+  {
+    label: 'Photo max400 q0.5',
+    options: {mediaType: 'photo', maxWidth: 400, maxHeight: 400, quality: 0.5},
+  },
+  {label: 'Photos ×3', options: {mediaType: 'photo', selectionLimit: 3}},
 ];
+
+/**
+ * base64 payloads are megabytes of noise in a debug log, so report the length
+ * instead and leave every other field untouched.
+ */
+const summarize = (key: string, value: unknown) =>
+  key === 'base64' && typeof value === 'string'
+    ? `<base64 ${value.length} chars>`
+    : value;
 
 export default function App() {
   // getEnforcing throws at import time if the TurboModule is not registered,
@@ -60,7 +83,7 @@ export default function App() {
     const result: PickerResult = capture
       ? await captureMedia(options)
       : await pickMedia(options);
-    setLog(`${label}\n${JSON.stringify(result, null, 2)}`);
+    setLog(`${label}\n${JSON.stringify(result, summarize, 2)}`);
   };
 
   return (

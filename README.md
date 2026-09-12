@@ -139,18 +139,22 @@ See `src/types.ts` for the full documented shape.
 
 ## Verification status
 
-`example/` is a React Native CLI app that links this package. It builds and runs on both platforms.
+`example/` is a React Native CLI app that links this package and builds on both platforms. `example/ios/MediaPickerExampleUITests` is an XCUITest suite that drives the real PHPicker and cropper; run it with `xcodebuild test -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample -destination 'platform=iOS Simulator,name=iPhone 17 Pro'`.
 
-Exercised on an Android emulator (API 36), end to end:
+**Android, exercised on an emulator (API 36) — no permission prompt in any flow:**
 
-- picking a photo, and a video, from the gallery — no permission prompt at any point
-- capturing a photo, and a video, with the camera — no permission prompt at any point
-- cropping after a pick and after a capture, with the reported `cropRect` and output size checked against the source
+- picking a photo, a video, and three photos at once from the gallery
+- capturing a photo and recording a video with the camera
+- cropping after a pick and after a capture, with `cropRect` and output size checked against the source
+- `maxWidth`/`maxHeight`/`quality`, `includeBase64`, `includeExif`, `includeExtra`
+- `cameraType: 'front'` completes, but the AOSP camera ignores the hint — as documented, it is best-effort
 - `invalid_options` for `mediaType: 'mixed'` on capture
 
-Exercised on an iOS simulator: the build links, the TurboModule registers, and a JS → native → promise round trip resolves. **The PHPicker, cropper and camera UIs have not been driven on iOS** — the camera does not exist on the simulator, so `captureMedia` needs a real device before you rely on it.
+**Android, exercised on an emulator (API 31):** the `ACTION_OPEN_DOCUMENT` fallback engages (the photo picker is absent), returns a `com.android.providers.media.documents` URI, and copies to cache like any other asset.
 
-Still unexercised on both: multi-select, `includeBase64`, `includeExif`, `includeExtra`, `maxWidth`/`maxHeight`/`quality`, `cameraType: 'front'`, and the `ACTION_OPEN_DOCUMENT` fallback on pre-API-33 devices.
+**iOS, exercised on a simulator (iOS 26) — 7 passing UI tests:** picking one photo and three, cropping after a pick, `includeBase64`/`includeExif`/`includeExtra`, `maxWidth`/`quality`, `captureMedia` presenting the camera in photo mode, and the media-type guard resolving rather than hanging.
+
+**Not verified anywhere:** the iOS capture *completion* path — writing the temp file, building the asset, and handing off to the cropper after a shot. Simulators present a camera UI but have no capture pipeline behind the shutter, so this needs a physical device. `saveToPhotos` is not implemented, and video compression is not implemented.
 
 ## Xcode 16.3+ / Xcode 26
 

@@ -140,16 +140,29 @@ RCT_EXPORT_MODULE()
     return;
   }
 
+  BOOL isVideo = [options[@"mediaType"] isEqualToString:@"video"];
+  NSString *wantedType = isVideo ? UTTypeMovie.identifier : UTTypeImage.identifier;
+
+  // A camera that exists does not necessarily record video. Assigning a
+  // mediaTypes value the source cannot supply leaves the controller unable to
+  // present, and the promise would then never settle at all.
+  NSArray<NSString *> *availableTypes =
+      [UIImagePickerController availableMediaTypesForSourceType:UIImagePickerControllerSourceTypeCamera];
+  if (![availableTypes containsObject:wantedType]) {
+    resolve([self errorResultWithCode:@"camera_unavailable"
+                              message:isVideo ? @"This camera cannot record video"
+                                              : @"This camera cannot take photos"]);
+    return;
+  }
+
   self.pendingResolve = resolve;
   self.pendingOptions = options;
-
-  BOOL isVideo = [options[@"mediaType"] isEqualToString:@"video"];
 
   dispatch_async(dispatch_get_main_queue(), ^{
     UIImagePickerController *camera = [[UIImagePickerController alloc] init];
     camera.sourceType = UIImagePickerControllerSourceTypeCamera;
     camera.delegate = self;
-    camera.mediaTypes = @[isVideo ? UTTypeMovie.identifier : UTTypeImage.identifier];
+    camera.mediaTypes = @[wantedType];
 
     if ([options[@"cameraType"] isEqualToString:@"front"] &&
         [UIImagePickerController isCameraDeviceAvailable:UIImagePickerControllerCameraDeviceFront]) {
@@ -421,8 +434,19 @@ RCT_EXPORT_MODULE()
     }
   }
 
+  // The library's display name still carries the source extension, so a
+  // re-encoded PNG would be reported as "shot.png" while both the file on disk
+  // and `type` say JPEG. Report the extension the bytes actually have.
+  NSString *reportedName = fileName;
+  NSString *finalExtension = finalPath.pathExtension;
+  if (finalExtension.length > 0 &&
+      ![fileName.pathExtension isEqualToString:finalExtension]) {
+    reportedName = [[fileName stringByDeletingPathExtension]
+        stringByAppendingPathExtension:finalExtension];
+  }
+
   return [self assetDictForPath:finalPath
-                       fileName:fileName
+                       fileName:reportedName
                            mime:mime
                         options:options
                          result:result
@@ -540,7 +564,21 @@ RCT_EXPORT_MODULE()
 
   NSDictionary *options = self.pendingOptions ?: @{};
   CGFloat quality = options[@"quality"] ? [options[@"quality"] floatValue] : 1.0;
-  NSData *data = UIImageJPEGRepresentation(image, quality);
+
+  // TOCropViewController only crops; it has no notion of an output size, so
+  // cropWidth/cropHeight would otherwise mean "aspect ratio" here and "exact
+  // output size" on Android. Match Android: an aspect-locked crop resizes
+  // exactly, a free-form one fits inside without stretching.
+  CGFloat cropWidth = [options[@"cropWidth"] floatValue];
+  CGFloat cropHeight = [options[@"cropHeight"] floatValue];
+  UIImage *output = image;
+  if (cropWidth > 0 && cropHeight > 0) {
+    output = [options[@"freeStyleCropEnabled"] boolValue]
+        ? [self image:image scaledToMaxWidth:cropWidth maxHeight:cropHeight]
+        : [self image:image resizedExactlyToWidth:cropWidth height:cropHeight];
+  }
+
+  NSData *data = UIImageJPEGRepresentation(output, quality);
   if (data == nil) {
     [self finishWith:[self errorResultWithCode:@"crop_failed" message:@"Could not encode the cropped image"]];
     return;
@@ -566,8 +604,8 @@ RCT_EXPORT_MODULE()
   asset[@"type"] = @"image/jpeg";
   asset[@"fileName"] = path.lastPathComponent;
   asset[@"fileSize"] = @(data.length);
-  asset[@"width"] = @(image.size.width * image.scale);
-  asset[@"height"] = @(image.size.height * image.scale);
+  asset[@"width"] = @(output.size.width * output.scale);
+  asset[@"height"] = @(output.size.height * output.scale);
   asset[@"cropRect"] = @{
     @"x": @(cropRect.origin.x),
     @"y": @(cropRect.origin.y),
@@ -624,6 +662,23 @@ RCT_EXPORT_MODULE()
   return props[(NSString *)kCGImagePropertyExifDictionary] ?: props;
 }
 
+/// Unconditional resize to an exact pixel size, used for aspect-locked crops
+/// where the caller asked for a specific output size.
+- (UIImage *)image:(UIImage *)image resizedExactlyToWidth:(CGFloat)width height:(CGFloat)height
+{
+  CGSize size = CGSizeMake(floor(width), floor(height));
+  if (size.width <= 0 || size.height <= 0) return image;
+
+  UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+  format.scale = 1.0;
+  format.opaque = NO;
+  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size
+                                                                            format:format];
+  return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+    [image drawInRect:CGRectMake(0, 0, size.width, size.height)];
+  }];
+}
+
 - (UIImage *)image:(UIImage *)image scaledToMaxWidth:(CGFloat)maxWidth maxHeight:(CGFloat)maxHeight
 {
   if (maxWidth <= 0 && maxHeight <= 0) return image;
@@ -633,7 +688,15 @@ RCT_EXPORT_MODULE()
   if (scale >= 1.0) return image;
 
   CGSize newSize = CGSizeMake(floor(image.size.width * scale), floor(image.size.height * scale));
-  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:newSize];
+
+  // UIGraphicsImageRenderer defaults to the screen's scale, so on a 3x device a
+  // 400pt render produces a 1200px image and maxWidth is silently tripled.
+  // Pixels are what the caller asked for, so pin the scale to 1.
+  UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+  format.scale = 1.0;
+  format.opaque = NO;
+  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:newSize
+                                                                            format:format];
   return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
     [image drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
   }];

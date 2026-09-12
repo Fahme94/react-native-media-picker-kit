@@ -91,8 +91,13 @@ export interface Asset {
   bitrate?: number;
   base64?: string;
   exif?: Record<string, unknown>;
-  /** includeExtra only. */
+  /**
+   * includeExtra only. Platform-specific by necessity: iOS reports the PHAsset
+   * localIdentifier, Android the gallery display name, because the Android
+   * pickers hand back no stable asset id.
+   */
   id?: string;
+  /** includeExtra only. Android only — epoch milliseconds as a string. */
   timestamp?: string;
   /** Android: the original content:// uri. iOS: PHAsset localIdentifier. */
   originalPath?: string;
