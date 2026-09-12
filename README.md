@@ -16,7 +16,7 @@ yarn add react-native-media-picker
 cd ios && pod install
 ```
 
-Requires the New Architecture (`newArchEnabled=true`, RN 0.76+). There is no legacy bridge fallback.
+Requires the New Architecture (`newArchEnabled=true`); there is no legacy bridge fallback. The `react-native` peer range is `>=0.79.0`, which is the oldest release this has actually been built against — RN 0.79 (CLI) and RN 0.86 / Expo SDK 57 are both verified. `expo` is an optional peer, needed only if you use the config plugin.
 
 ### Android
 
@@ -139,7 +139,10 @@ See `src/types.ts` for the full documented shape.
 
 ## Verification status
 
-`example/` is a React Native CLI app that links this package and builds on both platforms. `example/ios/MediaPickerExampleUITests` is an XCUITest suite that drives the real PHPicker and cropper; run it with `xcodebuild test -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample -destination 'platform=iOS Simulator,name=iPhone 17 Pro'`.
+`example/` is a React Native CLI app that links this package and builds on both platforms. It carries two iOS test targets, both run by `xcodebuild test -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample -destination 'platform=iOS Simulator,name=iPhone 17 Pro'`:
+
+- `MediaPickerExampleUITests` — XCUITests that drive the real PHPicker, camera and cropper.
+- `MediaPickerCaptureTests` — unit tests hosted by the app. A simulator renders a camera but has no capture pipeline, so its shutter never fires the delegate and everything the module does *after* a shot is unreachable from a UI test. These call that delegate directly with the same info dictionaries `UIImagePickerController` produces, which runs the real temp-file write, asset builder and crop hand-off.
 
 **Android, exercised on an emulator (API 36) — no permission prompt in any flow:**
 
@@ -152,13 +155,40 @@ See `src/types.ts` for the full documented shape.
 
 **Android, exercised on an emulator (API 31):** the `ACTION_OPEN_DOCUMENT` fallback engages (the photo picker is absent), returns a `com.android.providers.media.documents` URI, and copies to cache like any other asset.
 
-**iOS, exercised on a simulator (iOS 26) — 7 passing UI tests:** picking one photo and three, cropping after a pick, `includeBase64`/`includeExif`/`includeExtra`, `maxWidth`/`quality`, `captureMedia` presenting the camera in photo mode, and the media-type guard resolving rather than hanging.
+**iOS, exercised on a simulator (iOS 26) — 14 passing tests, no permission prompt beyond the system camera alert:**
 
-**Not verified anywhere:** the iOS capture *completion* path — writing the temp file, building the asset, and handing off to the cropper after a shot. Simulators present a camera UI but have no capture pipeline behind the shutter, so this needs a physical device. `saveToPhotos` is not implemented, and video compression is not implemented.
+- picking one photo and three, cropping after a pick, `includeBase64`/`includeExif`/`includeExtra`, `maxWidth`/`quality`
+- `captureMedia` presenting the camera in photo mode, and the shutter leaving the promise unsettled rather than hanging
+- video capture turned away by the media-type guard with `camera_unavailable` — the simulated camera reports no movie support, and without the guard the promise would never settle at all
+- a captured photo becoming a file-backed `image/jpeg` asset at its true pixel size, with `fileSize` matching the bytes on disk
+- a captured photo honouring `maxWidth`/`maxHeight`/`quality` through the same builder a gallery pick uses
+- a captured recording copied out of the system temp file into the module's own directory, with duration in milliseconds and the track's real dimensions
+- a captured photo with `cropping: true` reaching the cropper instead of resolving early, then resolving at exactly `cropWidth` × `cropHeight` with the `cropRect` it was cropped at
+- `cannot_process_asset` when the camera returns no image, and when the recording cannot be read
 
-## Xcode 16.3+ / Xcode 26
+**Expo, verified end to end (SDK 57 / RN 0.86):** installed from the packed npm tarball — not a symlink — so the published layout and the `files` allowlist are part of the test. `expo prebuild` runs the config plugin and writes all three `Info.plist` keys (custom overrides honoured), CocoaPods links the pod, and both platforms build. The merged Android manifest namespaces the FileProvider to the app's own id and declares **no camera or storage permission**. Picking and capturing a photo both work on an emulator; on the iOS simulator the module loads and round-trips.
 
-React Native vendors `fmt` 11.0.2 through at least 0.81, whose `consteval` usage newer Clang rejects, and an app will not compile at all until it is worked around. This is a React Native issue rather than one of this package, but you will hit it. `example/ios/Podfile` carries the hook:
+**Not verified anywhere:** on iOS, that a real shutter calls the delegate at all — every line that runs after it is covered above, but the camera hardware itself is not, and neither is video *recording*, since no simulator offers it. Both need a physical device; `test8CaptureShutter` runs the full flow through **Use Photo** when one is attached. `saveToPhotos` is not implemented, and video compression is not implemented.
+
+## Releasing
+
+`files` in `package.json` is an allowlist, so there is no `.npmignore`: only `src`, the built `lib`, the
+native sources, the podspec and the Expo plugin are published. `src` has to ship because React Native's
+codegen reads the TurboModule spec out of it when the consuming app builds. `prepare` runs `bob build`,
+which npm invokes before packing, so a stale `lib` cannot be published.
+
+```bash
+npm pack --dry-run   # 36 files, no build output, no example app
+npm publish
+git tag v$(node -p "require('./package.json').version") && git push --tags
+```
+
+The podspec takes its version from `package.json` and its tag from `v<version>`, so tagging that way is
+what lets CocoaPods resolve a release.
+
+## Xcode 16.3+ / Xcode 26 (RN 0.81 and older)
+
+React Native vendors `fmt` 11.0.2 up to and including 0.81, whose `consteval` usage newer Clang rejects, and such an app will not compile at all until it is worked around. This is a React Native issue rather than one of this package. **RN 0.86 / Expo SDK 57 builds cleanly with no workaround**; only older versions need the hook that `example/ios/Podfile` carries:
 
 ```ruby
 installer.pods_project.targets.each do |target|

@@ -48,6 +48,16 @@
                ReferencedContainer = "container:MediaPickerExample.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "483AB838635EA2DE95BFA55A"
+               BuildableName = "MediaPickerCaptureTests.xctest"
+               BlueprintName = "MediaPickerCaptureTests"
+               ReferencedContainer = "container:MediaPickerExample.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

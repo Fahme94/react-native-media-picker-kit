@@ -167,4 +167,34 @@ final class PickerUITests: XCTestCase {
     XCTAssertTrue(json!.contains("camera_unavailable"),
                   "expected camera_unavailable when the camera cannot record video")
   }
+
+  /// Presses the shutter. A simulator renders the camera but has no capture
+  /// pipeline behind it, so no review sheet ever appears and the test can only
+  /// confirm the camera stayed up; on a physical device the same run goes all
+  /// the way through "Use Photo" to a resolved asset. Either outcome passes --
+  /// what would not pass is the shutter leaving the promise hanging.
+  func test8CaptureShutter() throws {
+    tap("Shoot photo")
+    let allow = app.alerts.buttons["OK"]
+    if allow.waitForExistence(timeout: 3) { allow.tap() }
+
+    let shutter = app.buttons["PhotoCapture"]
+    XCTAssertTrue(shutter.waitForExistence(timeout: 30), "camera never presented")
+    shutter.tap()
+
+    let use = app.buttons["Use Photo"]
+    guard use.waitForExistence(timeout: 15) else {
+      print("RESULT[capture-shutter]: no review sheet - simulator has no capture pipeline")
+      XCTAssertTrue(shutter.exists, "the shutter neither captured nor left the camera up")
+      app.buttons["DismissImagePickerButton"].tap()
+      return
+    }
+
+    use.tap()
+    let json = resultText(containing: "\"didCancel\"", timeout: 60)
+    report("capture-shutter", json)
+    XCTAssertNotNil(json, "capture never settled after Use Photo")
+    XCTAssertTrue(json!.contains("\"didCancel\": false"), "a completed capture should not report a cancel")
+    XCTAssertTrue(json!.contains("image/jpeg"), "captured photo should be reported as a JPEG")
+  }
 }

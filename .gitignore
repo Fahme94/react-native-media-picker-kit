@@ -16,6 +16,7 @@ Thumbs.db
 android/.gradle/
 android/build/
 android/.cxx/
+android/.settings/
 .gradle/
 build/
 local.properties
@@ -50,3 +51,12 @@ coverage/
 .expo/
 .cache/
 
+# Packaging
+# `npm pack` tarballs, and an .npmrc that would carry a publish token
+*.tgz
+.npmrc
+
+# Local environment
+.env
+.env.local
+*.local

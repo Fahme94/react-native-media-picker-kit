@@ -8,8 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		0C80B921A6F3F58F76C31292 /* libPods-MediaPickerExample.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-MediaPickerExample.a */; };
+		10411858DF5E52AA3CB21A0F /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E7C3ABB71D821E8D04EB6B38 /* Foundation.framework */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		57460251C48081C7857A3347 /* PickerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19A7668E4861D1F50CB95834 /* PickerUITests.swift */; };
+		66A4B657BDEA8CB274730C4C /* CaptureDelegateTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A7091ACAEE00FCE9CF667933 /* CaptureDelegateTests.m */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		9DCA462996073B86DF03A6FC /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E7C3ABB71D821E8D04EB6B38 /* Foundation.framework */; };
@@ -17,6 +19,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		19E944BB11D7C13C919472AA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 13B07F861A680F5B00A75B9A;
+			remoteInfo = MediaPickerExample;
+		};
 		37C6DB8F8320EC3BEA8ED2E3 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
@@ -37,6 +46,8 @@
 		5DCACB8F33CDC322A6C60F78 /* libPods-MediaPickerExample.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-MediaPickerExample.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = MediaPickerExample/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = MediaPickerExample/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		A7091ACAEE00FCE9CF667933 /* CaptureDelegateTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = CaptureDelegateTests.m; sourceTree = "<group>"; };
+		B5329D79539992F47BFF2F04 /* MediaPickerCaptureTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MediaPickerCaptureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C5DE48EDCF959CD0ACD64BE2 /* MediaPickerExampleUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MediaPickerExampleUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E7C3ABB71D821E8D04EB6B38 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
@@ -48,6 +59,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				0C80B921A6F3F58F76C31292 /* libPods-MediaPickerExample.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B77BAC7B82494D5E78B4DA51 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10411858DF5E52AA3CB21A0F /* Foundation.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -82,6 +101,15 @@
 			name = iOS;
 			sourceTree = "<group>";
 		};
+		2C3E6A61280C40F64DE3BF1E /* MediaPickerCaptureTests */ = {
+			isa = PBXGroup;
+			children = (
+				A7091ACAEE00FCE9CF667933 /* CaptureDelegateTests.m */,
+			);
+			name = MediaPickerCaptureTests;
+			path = MediaPickerCaptureTests;
+			sourceTree = SOURCE_ROOT;
+		};
 		2D16E6871FA4F8E400B85C8A /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -108,6 +136,7 @@
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
 				BBD78D7AC51CEA395F1C20DB /* Pods */,
 				BC6C2A8F22E88216BBC61588 /* MediaPickerExampleUITests */,
+				2C3E6A61280C40F64DE3BF1E /* MediaPickerCaptureTests */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -119,6 +148,7 @@
 			children = (
 				13B07F961A680F5B00A75B9A /* MediaPickerExample.app */,
 				C5DE48EDCF959CD0ACD64BE2 /* MediaPickerExampleUITests.xctest */,
+				B5329D79539992F47BFF2F04 /* MediaPickerCaptureTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -164,6 +194,24 @@
 			productName = MediaPickerExample;
 			productReference = 13B07F961A680F5B00A75B9A /* MediaPickerExample.app */;
 			productType = "com.apple.product-type.application";
+		};
+		483AB838635EA2DE95BFA55A /* MediaPickerCaptureTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D5AD92C4261A7CCA6738F20E /* Build configuration list for PBXNativeTarget "MediaPickerCaptureTests" */;
+			buildPhases = (
+				C1235B8E2EBE0B31526DB1F7 /* Sources */,
+				B77BAC7B82494D5E78B4DA51 /* Frameworks */,
+				D328BFBAF4E879F64C1CE553 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CB8D77FC4FFBF8C348AEB88B /* PBXTargetDependency */,
+			);
+			name = MediaPickerCaptureTests;
+			productName = MediaPickerCaptureTests;
+			productReference = B5329D79539992F47BFF2F04 /* MediaPickerCaptureTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		86431297472297A85F7E0B73 /* MediaPickerExampleUITests */ = {
 			isa = PBXNativeTarget;
@@ -211,6 +259,7 @@
 			targets = (
 				13B07F861A680F5B00A75B9A /* MediaPickerExample */,
 				86431297472297A85F7E0B73 /* MediaPickerExampleUITests */,
+				483AB838635EA2DE95BFA55A /* MediaPickerCaptureTests */,
 			);
 		};
 /* End PBXProject section */
@@ -223,6 +272,13 @@
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				F7771E07199C3C1A6D208479 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D328BFBAF4E879F64C1CE553 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -327,9 +383,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C1235B8E2EBE0B31526DB1F7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				66A4B657BDEA8CB274730C4C /* CaptureDelegateTests.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		CB8D77FC4FFBF8C348AEB88B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MediaPickerExample;
+			target = 13B07F861A680F5B00A75B9A /* MediaPickerExample */;
+			targetProxy = 19E944BB11D7C13C919472AA /* PBXContainerItemProxy */;
+		};
 		FF2CF230650FDBFF0B618B3D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = MediaPickerExample;
@@ -390,6 +460,23 @@
 				PRODUCT_NAME = MediaPickerExample;
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		6100E1E45F6F40F36FF6786B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				PRODUCT_BUNDLE_IDENTIFIER = org.reactjs.native.example.MediaPickerCaptureTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MediaPickerExample.app/MediaPickerExample";
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -580,6 +667,22 @@
 			};
 			name = Release;
 		};
+		F4861D552EBF9472C8A3CC2F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				PRODUCT_BUNDLE_IDENTIFIER = org.reactjs.native.example.MediaPickerCaptureTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MediaPickerExample.app/MediaPickerExample";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -606,6 +709,15 @@
 			buildConfigurations = (
 				83CBBA201A601CBA00E9B192 /* Debug */,
 				83CBBA211A601CBA00E9B192 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D5AD92C4261A7CCA6738F20E /* Build configuration list for PBXNativeTarget "MediaPickerCaptureTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6100E1E45F6F40F36FF6786B /* Release */,
+				F4861D552EBF9472C8A3CC2F /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

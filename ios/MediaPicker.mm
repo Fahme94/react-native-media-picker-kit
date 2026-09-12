@@ -355,7 +355,7 @@ RCT_EXPORT_MODULE()
       return;
     }
     NSDictionary *asset = [self imageAssetAtPath:path
-                                        fileName:path.lastPathComponent
+                                        fileName:nil
                                          options:options
                                           result:nil];
     [self finishWith:@{@"didCancel": @NO, @"assets": @[asset]}];
@@ -434,14 +434,17 @@ RCT_EXPORT_MODULE()
     }
   }
 
+  // A camera shot has no display name of its own, so the caller passes nil and
+  // the file that actually ends up on disk names it -- otherwise a re-encode
+  // would leave the asset naming the temp file it just deleted.
+  NSString *reportedName = fileName ?: finalPath.lastPathComponent;
   // The library's display name still carries the source extension, so a
   // re-encoded PNG would be reported as "shot.png" while both the file on disk
   // and `type` say JPEG. Report the extension the bytes actually have.
-  NSString *reportedName = fileName;
   NSString *finalExtension = finalPath.pathExtension;
   if (finalExtension.length > 0 &&
-      ![fileName.pathExtension isEqualToString:finalExtension]) {
-    reportedName = [[fileName stringByDeletingPathExtension]
+      ![reportedName.pathExtension isEqualToString:finalExtension]) {
+    reportedName = [[reportedName stringByDeletingPathExtension]
         stringByAppendingPathExtension:finalExtension];
   }
 

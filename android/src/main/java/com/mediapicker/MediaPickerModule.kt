@@ -51,7 +51,11 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
   private var pendingCaptureIsVideo = false
 
   private val activityListener = object : com.facebook.react.bridge.BaseActivityEventListener() {
-    override fun onActivityResult(activity: Activity?, requestCode: Int, resultCode: Int, data: Intent?) {
+    // `activity` is non-null in React Native 0.81+, where this listener became
+    // Kotlin; it was a Java platform type before that, which accepts either.
+    // Declaring it non-null is the one signature that compiles on both, and the
+    // parameter is unused here anyway — `currentActivity` is what gets used.
+    override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
       when (requestCode) {
         RC_PICK -> handlePickResult(resultCode, data)
         RC_CAPTURE -> handleCaptureResult(resultCode, data)
