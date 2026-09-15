@@ -16,6 +16,7 @@ export type ErrorCode =
   | 'no_library_permission'
   | 'cannot_process_asset'
   | 'crop_failed'
+  | 'compress_failed'
   | 'camera_unavailable'
   | 'invalid_options'
   | 'picker_busy'
@@ -36,6 +37,19 @@ export interface PickerOptions {
   quality?: number;
   /** Convert HEIC/HEIF/PNG output to JPEG. Default true. */
   forceJpg?: boolean;
+
+  /**
+   * Compress the output until the file is at most this many bytes. 0 disables
+   * it. Runs last, after maxWidth/maxHeight/quality and after any crop, so it
+   * is the size the caller actually uploads.
+   */
+  maxImageFileSize?: number;
+  /**
+   * Same, for video: re-encodes to H.264/AAC at a bitrate derived from the
+   * clip's duration. 0 disables it, which is the default -- video is never
+   * touched unless this is set.
+   */
+  maxVideoFileSize?: number;
 
   includeBase64?: boolean;
   includeExif?: boolean;
@@ -74,6 +88,16 @@ export interface PickerOptions {
   cropperChooseText?: string;
   cropperCancelText?: string;
 }
+
+/**
+ * What `compressMedia` accepts. Deliberately narrower than PickerOptions: only
+ * the byte budgets apply, so a file already under budget always comes back
+ * untouched. The image-output options belong to picking.
+ */
+export type CompressOptions = Pick<
+  PickerOptions,
+  'maxImageFileSize' | 'maxVideoFileSize' | 'includeBase64' | 'includeExif'
+>;
 
 export interface Asset {
   /** file:// path in app cache. Null when writeTempFile is false (iOS). */

@@ -21,6 +21,12 @@ export interface Spec extends TurboModule {
   /** Crop an image that is already on disk. `options.path` is required. */
   cropImage(options: UnsafeObject): Promise<UnsafeObject>;
 
+  /**
+   * Shrink a file already on disk below a byte budget. `options.path` is
+   * required, as is one of maxImageFileSize / maxVideoFileSize.
+   */
+  compressMedia(options: UnsafeObject): Promise<UnsafeObject>;
+
   /** Delete temp files this module created. Empty string clears all of them. */
   cleanTempFiles(path: string): Promise<void>;
 }

@@ -12,6 +12,23 @@
 
 static NSString *const kTempDirName = @"rn_media_picker";
 
+static const CGFloat kMinJPEGQuality = 0.1;
+static const CGFloat kMaxJPEGQuality = 0.95;
+static const NSInteger kQualitySearchSteps = 7;
+static const CGFloat kMinImageEdge = 64.0;
+
+// Roughly the bits H.264 needs per pixel per frame to still look acceptable.
+static const CGFloat kVideoBitsPerPixel = 0.12;
+static const NSInteger kVideoFrameRate = 30;
+static const NSInteger kMaxAudioBitRate = 64000;
+static const NSInteger kMinAudioBitRate = 24000;
+static const NSInteger kMinVideoBitRate = 120000;
+static const CGFloat kMinVideoEdge = 144.0;
+// Aim under the limit rather than at it. An encoder treats an average bitrate as
+// something to hover around, and key frames and container overhead do not scale
+// down with it -- targeting the limit exactly measured ~25% over on a short clip.
+static const CGFloat kSizeSafetyMargin = 0.90;
+
 @interface MediaPicker () <PHPickerViewControllerDelegate,
                            TOCropViewControllerDelegate,
                            UIImagePickerControllerDelegate,
@@ -213,6 +230,60 @@ RCT_EXPORT_MODULE()
   [self presentCropperWithImage:image options:options];
 }
 
+- (void)compressMedia:(NSDictionary *)options
+              resolve:(RCTPromiseResolveBlock)resolve
+               reject:(RCTPromiseRejectBlock)reject
+{
+  NSString *path = options[@"path"];
+  if (path.length == 0) {
+    resolve([self errorResultWithCode:@"invalid_options" message:@"path is required"]);
+    return;
+  }
+  NSString *cleanPath = [path hasPrefix:@"file://"] ? [[NSURL URLWithString:path] path] : path;
+  if (![[NSFileManager defaultManager] fileExistsAtPath:cleanPath]) {
+    resolve([self errorResultWithCode:@"cannot_process_asset"
+                              message:[NSString stringWithFormat:@"There is no file at %@", path]]);
+    return;
+  }
+
+  NSString *mime = [self mimeTypeForPath:cleanPath];
+  BOOL isVideo = [mime hasPrefix:@"video/"];
+  if (!isVideo && ![mime hasPrefix:@"image/"]) {
+    resolve([self errorResultWithCode:@"invalid_options"
+                              message:[NSString stringWithFormat:
+                                          @"%@ is neither an image nor a video", path]]);
+    return;
+  }
+
+  // No UI, so this neither claims the picker slot nor minds that one is open.
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    // Only the byte budget applies. Routing through the picker's asset builders
+    // would drag maxWidth/quality/forceJpg along with it, and a file already
+    // under budget would then not come back untouched after all.
+    NSString *compressed = [self compressedPathFor:cleanPath mime:mime options:options];
+    if (compressed == nil) {
+      resolve([self errorResultWithCode:@"compress_failed"
+                                message:isVideo
+                                    ? @"Could not compress the video below maxVideoFileSize"
+                                    : @"Could not compress the image below maxImageFileSize"]);
+      return;
+    }
+
+    // The name follows the bytes, the same way it does after a re-encode.
+    NSString *fileName = [[cleanPath.lastPathComponent stringByDeletingPathExtension]
+        stringByAppendingPathExtension:compressed.pathExtension];
+    NSMutableDictionary *asset = [[self assetDictForPath:compressed
+                                               fileName:fileName
+                                                   mime:[self mimeTypeForPath:compressed]
+                                                options:options
+                                                 result:nil
+                                                  extra:isVideo ? [self videoExtrasAtPath:compressed]
+                                                                : nil] mutableCopy];
+    asset[@"originalPath"] = path;
+    resolve(@{@"didCancel": @NO, @"assets": @[asset]});
+  });
+}
+
 - (void)cleanTempFiles:(NSString *)path
                resolve:(RCTPromiseResolveBlock)resolve
                 reject:(RCTPromiseRejectBlock)reject
@@ -252,15 +323,20 @@ RCT_EXPORT_MODULE()
     NSMutableArray<NSDictionary *> *assets = [NSMutableArray array];
     dispatch_group_t group = dispatch_group_create();
     __block NSString *failure = nil;
+    __block NSString *failureCode = nil;
 
     for (PHPickerResult *result in results) {
       dispatch_group_enter(group);
       [self processResult:result
                   options:options
-               completion:^(NSDictionary *asset, NSString *error) {
+               completion:^(NSDictionary *asset, NSString *code, NSString *error) {
         @synchronized (assets) {
-          if (asset) [assets addObject:asset];
-          else if (error && failure == nil) failure = error;
+          if (asset) {
+            [assets addObject:asset];
+          } else if (error && failure == nil) {
+            failure = error;
+            failureCode = code;
+          }
         }
         dispatch_group_leave(group);
       }];
@@ -269,7 +345,7 @@ RCT_EXPORT_MODULE()
     dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
 
     if (assets.count == 0) {
-      [self finishWith:[self errorResultWithCode:@"cannot_process_asset"
+      [self finishWith:[self errorResultWithCode:failureCode ?: @"cannot_process_asset"
                                          message:failure ?: @"Could not read the selected media"]];
       return;
     }
@@ -320,10 +396,16 @@ RCT_EXPORT_MODULE()
                                            message:copyError.localizedDescription]];
         return;
       }
+      NSString *compressionError = nil;
       NSDictionary *asset = [self videoAssetAtPath:destination
-                                          fileName:destination.lastPathComponent
+                                          fileName:nil
                                            options:options
-                                            result:nil];
+                                            result:nil
+                                  compressionError:&compressionError];
+      if (asset == nil) {
+        [self finishWith:[self errorResultWithCode:@"compress_failed" message:compressionError]];
+        return;
+      }
       [self finishWith:@{@"didCancel": @NO, @"assets": @[asset]}];
       return;
     }
@@ -354,10 +436,16 @@ RCT_EXPORT_MODULE()
                                          message:@"Could not write the captured photo"]];
       return;
     }
+    NSString *compressionError = nil;
     NSDictionary *asset = [self imageAssetAtPath:path
                                         fileName:nil
                                          options:options
-                                          result:nil];
+                                          result:nil
+                                compressionError:&compressionError];
+    if (asset == nil) {
+      [self finishWith:[self errorResultWithCode:@"compress_failed" message:compressionError]];
+      return;
+    }
     [self finishWith:@{@"didCancel": @NO, @"assets": @[asset]}];
   });
 }
@@ -372,7 +460,7 @@ RCT_EXPORT_MODULE()
 
 - (void)processResult:(PHPickerResult *)result
               options:(NSDictionary *)options
-           completion:(void (^)(NSDictionary *asset, NSString *error))completion
+           completion:(void (^)(NSDictionary *asset, NSString *code, NSString *error))completion
 {
   NSItemProvider *provider = result.itemProvider;
   BOOL isVideo = [provider hasItemConformingToTypeIdentifier:UTTypeMovie.identifier];
@@ -381,7 +469,8 @@ RCT_EXPORT_MODULE()
   [provider loadFileRepresentationForTypeIdentifier:typeIdentifier
                                   completionHandler:^(NSURL *url, NSError *error) {
     if (url == nil) {
-      completion(nil, error.localizedDescription ?: @"Asset could not be loaded");
+      completion(nil, @"cannot_process_asset",
+                 error.localizedDescription ?: @"Asset could not be loaded");
       return;
     }
 
@@ -391,22 +480,36 @@ RCT_EXPORT_MODULE()
     NSError *copyError = nil;
     [[NSFileManager defaultManager] copyItemAtPath:url.path toPath:destination error:&copyError];
     if (copyError != nil) {
-      completion(nil, copyError.localizedDescription);
+      completion(nil, @"cannot_process_asset", copyError.localizedDescription);
       return;
     }
 
     NSString *fileName = url.lastPathComponent ?: destination.lastPathComponent;
+    NSString *compressionError = nil;
     NSDictionary *asset = isVideo
-        ? [self videoAssetAtPath:destination fileName:fileName options:options result:result]
-        : [self imageAssetAtPath:destination fileName:fileName options:options result:result];
-    completion(asset, nil);
+        ? [self videoAssetAtPath:destination
+                        fileName:fileName
+                         options:options
+                          result:result
+                compressionError:&compressionError]
+        : [self imageAssetAtPath:destination
+                        fileName:fileName
+                         options:options
+                          result:result
+                compressionError:&compressionError];
+    if (asset == nil) {
+      completion(nil, @"compress_failed", compressionError);
+      return;
+    }
+    completion(asset, nil, nil);
   }];
 }
 
-- (NSDictionary *)imageAssetAtPath:(NSString *)path
-                          fileName:(NSString *)fileName
-                           options:(NSDictionary *)options
-                            result:(PHPickerResult *)result
+- (nullable NSDictionary *)imageAssetAtPath:(NSString *)path
+                                  fileName:(NSString *)fileName
+                                   options:(NSDictionary *)options
+                                    result:(PHPickerResult *)result
+                          compressionError:(NSString **)compressionError
 {
   BOOL forceJpg = options[@"forceJpg"] == nil || [options[@"forceJpg"] boolValue];
   CGFloat maxWidth = [options[@"maxWidth"] floatValue];
@@ -426,12 +529,23 @@ RCT_EXPORT_MODULE()
       if (data != nil) {
         NSString *jpgPath = [self tempPathWithExtension:@"jpg"];
         if ([data writeToFile:jpgPath atomically:YES]) {
-          [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+          [self removeIfTemporary:path];
           finalPath = jpgPath;
           mime = @"image/jpeg";
         }
       }
     }
+  }
+
+  // Last, so the budget is measured against the bytes that actually ship.
+  NSString *compressed = [self compressedPathFor:finalPath mime:mime options:options];
+  if (compressed == nil) {
+    *compressionError = @"Could not compress the image below maxImageFileSize";
+    return nil;
+  }
+  if (![compressed isEqualToString:finalPath]) {
+    finalPath = compressed;
+    mime = @"image/jpeg";
   }
 
   // A camera shot has no display name of its own, so the caller passes nil and
@@ -456,28 +570,56 @@ RCT_EXPORT_MODULE()
                           extra:nil];
 }
 
-- (NSDictionary *)videoAssetAtPath:(NSString *)path
-                          fileName:(NSString *)fileName
-                           options:(NSDictionary *)options
-                            result:(PHPickerResult *)result
+- (nullable NSDictionary *)videoAssetAtPath:(NSString *)path
+                                  fileName:(nullable NSString *)fileName
+                                   options:(NSDictionary *)options
+                                    result:(PHPickerResult *)result
+                          compressionError:(NSString **)compressionError
+{
+  NSString *compressed = [self compressedPathFor:path mime:@"video/mp4" options:options];
+  if (compressed == nil) {
+    *compressionError = @"Could not compress the video below maxVideoFileSize";
+    return nil;
+  }
+  // Every reported dimension, duration and bitrate has to describe the file the
+  // caller is handed, so they are all read after compression rather than before.
+  path = compressed;
+
+  // A recording has no display name of its own, so the camera path passes nil
+  // and the file that ends up on disk names it -- otherwise a transcode would
+  // leave the asset naming the temp file it just replaced. A gallery pick does
+  // have a name, and it keeps it with the extension the bytes actually have.
+  NSString *reportedName = fileName ?: path.lastPathComponent;
+  if (path.pathExtension.length > 0 &&
+      ![reportedName.pathExtension isEqualToString:path.pathExtension]) {
+    reportedName = [[reportedName stringByDeletingPathExtension]
+        stringByAppendingPathExtension:path.pathExtension];
+  }
+
+  return [self assetDictForPath:path
+                       fileName:reportedName
+                           mime:[self mimeTypeForPath:path]
+                        options:options
+                         result:result
+                          extra:[self videoExtrasAtPath:path]];
+}
+
+/// Dimensions, duration and bitrate of a movie on disk, in the shape the Asset
+/// contract expects.
+- (NSDictionary *)videoExtrasAtPath:(NSString *)path
 {
   AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
   AVAssetTrack *track = [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];
   CGSize size = track ? CGSizeApplyAffineTransform(track.naturalSize, track.preferredTransform) : CGSizeZero;
 
-  NSMutableDictionary *extra = [NSMutableDictionary dictionary];
-  extra[@"duration"] = @(CMTimeGetSeconds(asset.duration) * 1000.0); // ms, to match Android
-  extra[@"bitrate"] = @(track ? track.estimatedDataRate : 0);
-  extra[@"width"] = @(fabs(size.width));
-  extra[@"height"] = @(fabs(size.height));
-
-  return [self assetDictForPath:path
-                       fileName:fileName
-                           mime:[self mimeTypeForPath:path]
-                        options:options
-                         result:result
-                          extra:extra];
+  return @{
+    @"duration": @(CMTimeGetSeconds(asset.duration) * 1000.0), // ms, to match Android
+    @"bitrate": @(track ? track.estimatedDataRate : 0),
+    @"width": @(fabs(size.width)),
+    @"height": @(fabs(size.height)),
+  };
 }
+
 
 - (NSDictionary *)assetDictForPath:(NSString *)path
                           fileName:(NSString *)fileName
@@ -520,11 +662,307 @@ RCT_EXPORT_MODULE()
   if (writeTempFile) {
     asset[@"uri"] = [@"file://" stringByAppendingString:path];
   } else {
-    [fm removeItemAtPath:path error:nil];
+    [self removeIfTemporary:path];
     asset[@"uri"] = [NSNull null];
   }
 
   return asset;
+}
+
+#pragma mark - Compression
+
+/// Dispatches to the right encoder for the media, and is a no-op when the
+/// caller set no budget or the file already fits. Returns nil when the budget
+/// cannot be met at all.
+- (nullable NSString *)compressedPathFor:(NSString *)path
+                                    mime:(NSString *)mime
+                                 options:(NSDictionary *)options
+{
+  if ([mime hasPrefix:@"video/"]) {
+    return [self compressVideoAtPath:path
+                          toMaxBytes:[options[@"maxVideoFileSize"] unsignedLongLongValue]];
+  }
+  return [self compressImageAtPath:path
+                        toMaxBytes:[options[@"maxImageFileSize"] unsignedLongLongValue]];
+}
+
+/// Re-encode until the file fits. Quality is searched first because it costs no
+/// pixels; only when even the lowest quality still overflows does the image get
+/// halved and searched again.
+- (nullable NSString *)compressImageAtPath:(NSString *)path
+                                toMaxBytes:(unsigned long long)maxBytes
+{
+  NSFileManager *fm = [NSFileManager defaultManager];
+  unsigned long long size = [[fm attributesOfItemAtPath:path error:nil] fileSize];
+  if (maxBytes == 0 || size <= maxBytes) return path;
+
+  UIImage *image = [UIImage imageWithContentsOfFile:path];
+  if (image == nil) return path;
+
+  NSData *encoded = nil;
+  while (YES) {
+    encoded = [self encodeImage:image underLimit:maxBytes];
+    CGFloat shortEdge = MIN(image.size.width, image.size.height);
+    if (encoded != nil || shortEdge / 2.0 < kMinImageEdge) break;
+    image = [self image:image
+        scaledToMaxWidth:floor(image.size.width / 2.0)
+               maxHeight:floor(image.size.height / 2.0)];
+  }
+  if (encoded == nil) return nil;
+
+  NSString *output = [self tempPathWithExtension:@"jpg"];
+  if (![encoded writeToFile:output atomically:YES]) return nil;
+  [self removeIfTemporary:path];
+  return output;
+}
+
+/// Highest JPEG quality whose output still fits, or nil when even the floor does not.
+- (nullable NSData *)encodeImage:(UIImage *)image underLimit:(unsigned long long)maxBytes
+{
+  CGFloat low = kMinJPEGQuality;
+  CGFloat high = kMaxJPEGQuality;
+  NSData *best = nil;
+
+  for (NSInteger step = 0; step < kQualitySearchSteps; step++) {
+    CGFloat quality = (low + high) / 2.0;
+    NSData *data = UIImageJPEGRepresentation(image, quality);
+    if (data == nil) return nil;
+    if (data.length <= maxBytes) {
+      best = data;
+      low = quality;
+    } else {
+      high = quality;
+    }
+  }
+
+  // The search closes in on the floor without ever evaluating it, so a run that
+  // found nothing has not actually ruled the floor out yet.
+  if (best == nil) {
+    NSData *data = UIImageJPEGRepresentation(image, kMinJPEGQuality);
+    if (data != nil && data.length <= maxBytes) best = data;
+  }
+  return best;
+}
+
+/// Re-encode to H.264/AAC at a bitrate the clip's own duration can afford.
+/// Returns the original untouched when it already fits, nil when even the floor
+/// bitrate cannot get under the budget.
+- (nullable NSString *)compressVideoAtPath:(NSString *)path
+                                toMaxBytes:(unsigned long long)maxBytes
+{
+  NSFileManager *fm = [NSFileManager defaultManager];
+  unsigned long long size = [[fm attributesOfItemAtPath:path error:nil] fileSize];
+  if (maxBytes == 0 || size <= maxBytes) return path;
+
+  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
+  AVAssetTrack *video = [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];
+  Float64 seconds = CMTimeGetSeconds(asset.duration);
+  if (video == nil || seconds <= 0) return path;
+
+  // An encoder lands near its requested bitrate rather than on it, so the budget
+  // gets one correction against what the first pass actually produced.
+  unsigned long long target = (unsigned long long)(maxBytes * kSizeSafetyMargin);
+  for (NSInteger attempt = 0; attempt < 2; attempt++) {
+    NSString *output = [self transcodeAsset:asset video:video seconds:seconds budget:target];
+    if (output == nil) return nil;
+
+    unsigned long long produced = [[fm attributesOfItemAtPath:output error:nil] fileSize];
+    if (produced <= maxBytes) {
+      [self removeIfTemporary:path];
+      return output;
+    }
+    // Scale the next request by how far this pass actually missed, keeping the
+    // margin so the correction lands inside the limit rather than back on it.
+    target = (unsigned long long)(target * (maxBytes * kSizeSafetyMargin) / (CGFloat)produced);
+    [fm removeItemAtPath:output error:nil];
+  }
+  return nil;
+}
+
+- (nullable NSString *)transcodeAsset:(AVURLAsset *)asset
+                                video:(AVAssetTrack *)videoTrack
+                              seconds:(Float64)seconds
+                               budget:(unsigned long long)budget
+{
+  AVAssetTrack *audioTrack = [[asset tracksWithMediaType:AVMediaTypeAudio] firstObject];
+
+  NSInteger totalBitRate = (NSInteger)(budget * 8 / seconds);
+  NSInteger audioBitRate = audioTrack
+      ? MIN(MAX(totalBitRate / 4, kMinAudioBitRate), kMaxAudioBitRate)
+      : 0;
+  NSInteger videoBitRate = MAX(totalBitRate - audioBitRate, kMinVideoBitRate);
+
+  NSError *error = nil;
+  AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
+  if (reader == nil) return nil;
+
+  NSString *output = [self tempPathWithExtension:@"mp4"];
+  AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:[NSURL fileURLWithPath:output]
+                                                   fileType:AVFileTypeMPEG4
+                                                      error:&error];
+  if (writer == nil) return nil;
+  // The point of compressing is uploading, so put the moov atom up front.
+  writer.shouldOptimizeForNetworkUse = YES;
+
+  // Sample buffers come out of the track unrotated, so the output is sized from
+  // naturalSize and the rotation is carried across as metadata instead of being
+  // baked in by re-rendering every frame.
+  CGSize target = [self sizeForBitRate:videoBitRate naturalSize:videoTrack.naturalSize];
+  if (target.width <= 0 || target.height <= 0) return nil;
+
+  AVAssetReaderTrackOutput *videoOutput = [AVAssetReaderTrackOutput
+      assetReaderTrackOutputWithTrack:videoTrack
+                       outputSettings:@{
+                         (NSString *)kCVPixelBufferPixelFormatTypeKey:
+                             @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+                       }];
+  videoOutput.alwaysCopiesSampleData = NO;
+  if (![reader canAddOutput:videoOutput]) return nil;
+  [reader addOutput:videoOutput];
+
+  AVAssetWriterInput *videoInput = [AVAssetWriterInput
+      assetWriterInputWithMediaType:AVMediaTypeVideo
+                     outputSettings:@{
+                       AVVideoCodecKey: AVVideoCodecTypeH264,
+                       AVVideoWidthKey: @(target.width),
+                       AVVideoHeightKey: @(target.height),
+                       AVVideoScalingModeKey: AVVideoScalingModeResizeAspectFill,
+                       AVVideoCompressionPropertiesKey: @{
+                         AVVideoAverageBitRateKey: @(videoBitRate),
+                         AVVideoMaxKeyFrameIntervalKey: @(kVideoFrameRate * 2),
+                         AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                       },
+                     }];
+  videoInput.expectsMediaDataInRealTime = NO;
+  videoInput.transform = videoTrack.preferredTransform;
+  if (![writer canAddInput:videoInput]) return nil;
+  [writer addInput:videoInput];
+
+  AVAssetReaderTrackOutput *audioOutput = nil;
+  AVAssetWriterInput *audioInput = nil;
+  if (audioTrack != nil) {
+    audioOutput = [AVAssetReaderTrackOutput
+        assetReaderTrackOutputWithTrack:audioTrack
+                         outputSettings:@{AVFormatIDKey: @(kAudioFormatLinearPCM)}];
+    audioOutput.alwaysCopiesSampleData = NO;
+
+    // AAC above stereo needs an explicit channel layout, so anything wider is
+    // folded down rather than failing the whole export.
+    CMFormatDescriptionRef format =
+        (__bridge CMFormatDescriptionRef)audioTrack.formatDescriptions.firstObject;
+    const AudioStreamBasicDescription *asbd =
+        format ? CMAudioFormatDescriptionGetStreamBasicDescription(format) : NULL;
+    NSInteger channels = (asbd && asbd->mChannelsPerFrame > 0)
+        ? MIN((NSInteger)asbd->mChannelsPerFrame, 2)
+        : 2;
+    Float64 sampleRate = (asbd && asbd->mSampleRate > 0) ? asbd->mSampleRate : 44100.0;
+
+    audioInput = [AVAssetWriterInput
+        assetWriterInputWithMediaType:AVMediaTypeAudio
+                       outputSettings:@{
+                         AVFormatIDKey: @(kAudioFormatMPEG4AAC),
+                         AVNumberOfChannelsKey: @(channels),
+                         AVSampleRateKey: @(sampleRate),
+                         AVEncoderBitRateKey: @(audioBitRate),
+                       }];
+    audioInput.expectsMediaDataInRealTime = NO;
+
+    if ([reader canAddOutput:audioOutput] && [writer canAddInput:audioInput]) {
+      [reader addOutput:audioOutput];
+      [writer addInput:audioInput];
+    } else {
+      // A track that cannot be re-encoded is dropped rather than failing the
+      // export; a silent clip under budget beats no clip at all.
+      audioOutput = nil;
+      audioInput = nil;
+    }
+  }
+
+  if (![reader startReading] || ![writer startWriting]) {
+    [reader cancelReading];
+    [writer cancelWriting];
+    return nil;
+  }
+  [writer startSessionAtSourceTime:kCMTimeZero];
+
+  dispatch_group_t group = dispatch_group_create();
+  [self pumpFrom:videoOutput into:videoInput label:"video" group:group];
+  if (audioInput != nil) [self pumpFrom:audioOutput into:audioInput label:"audio" group:group];
+  dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+
+  if (reader.status == AVAssetReaderStatusFailed) {
+    [writer cancelWriting];
+    [[NSFileManager defaultManager] removeItemAtPath:output error:nil];
+    return nil;
+  }
+
+  dispatch_semaphore_t done = dispatch_semaphore_create(0);
+  [writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(done); }];
+  dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+
+  if (writer.status != AVAssetWriterStatusCompleted) {
+    [[NSFileManager defaultManager] removeItemAtPath:output error:nil];
+    return nil;
+  }
+  return output;
+}
+
+/// Drains one track into its writer input on its own queue, leaving the group
+/// when the track runs dry or the writer stops accepting samples.
+- (void)pumpFrom:(AVAssetReaderTrackOutput *)output
+            into:(AVAssetWriterInput *)input
+           label:(const char *)label
+           group:(dispatch_group_t)group
+{
+  dispatch_queue_t queue = dispatch_queue_create(label, DISPATCH_QUEUE_SERIAL);
+  dispatch_group_enter(group);
+  [input requestMediaDataWhenReadyOnQueue:queue usingBlock:^{
+    while (input.isReadyForMoreMediaData) {
+      CMSampleBufferRef buffer = [output copyNextSampleBuffer];
+      if (buffer == NULL) {
+        [input markAsFinished];
+        dispatch_group_leave(group);
+        return;
+      }
+      BOOL appended = [input appendSampleBuffer:buffer];
+      CFRelease(buffer);
+      if (!appended) {
+        [input markAsFinished];
+        dispatch_group_leave(group);
+        return;
+      }
+    }
+  }];
+}
+
+/// The largest frame the video budget can carry, rounded to the even dimensions
+/// H.264 requires.
+- (CGSize)sizeForBitRate:(NSInteger)bitRate naturalSize:(CGSize)size
+{
+  CGFloat width = fabs(size.width);
+  CGFloat height = fabs(size.height);
+  if (width <= 0 || height <= 0) return CGSizeZero;
+
+  CGFloat targetPixels = bitRate / (kVideoBitsPerPixel * kVideoFrameRate);
+  CGFloat scale = MIN(sqrt(targetPixels / (width * height)), 1.0);
+
+  // Never shrink past the point where the clip stops being watchable; the
+  // bitrate alone carries the rest of the reduction from there.
+  CGFloat floorScale = MIN(kMinVideoEdge / MIN(width, height), 1.0);
+  if (scale < floorScale) scale = floorScale;
+
+  return CGSizeMake(MAX(floor(width * scale / 2.0) * 2.0, 2.0),
+                    MAX(floor(height * scale / 2.0) * 2.0, 2.0));
+}
+
+/// Replacing a file means dropping the one it replaced -- but compressMedia()
+/// takes any path the caller hands it, so only this module's own temp files are
+/// ever removed.
+- (void)removeIfTemporary:(NSString *)path
+{
+  if ([path hasPrefix:[self tempDirectory]]) {
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+  }
 }
 
 #pragma mark - Cropping
@@ -566,6 +1004,20 @@ RCT_EXPORT_MODULE()
   [cropViewController dismissViewControllerAnimated:YES completion:nil];
 
   NSDictionary *options = self.pendingOptions ?: @{};
+  NSMutableDictionary *pending = self.pendingCropAsset;
+
+  // Encoding, and now a compression search on top of it, are far too much work
+  // for the main thread the cropper calls back on.
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    [self finishCrop:image rect:cropRect options:options pending:pending];
+  });
+}
+
+- (void)finishCrop:(UIImage *)image
+              rect:(CGRect)cropRect
+           options:(NSDictionary *)options
+           pending:(nullable NSMutableDictionary *)pending
+{
   CGFloat quality = options[@"quality"] ? [options[@"quality"] floatValue] : 1.0;
 
   // TOCropViewController only crops; it has no notion of an output size, so
@@ -594,21 +1046,30 @@ RCT_EXPORT_MODULE()
   }
 
   // The pre-crop temp file is now dead weight.
-  NSString *previous = self.pendingCropAsset[@"uri"];
+  NSString *previous = pending[@"uri"];
   if ([previous isKindOfClass:[NSString class]]) {
     NSString *cleanPrevious = [previous hasPrefix:@"file://"] ? [[NSURL URLWithString:previous] path] : previous;
-    if ([cleanPrevious hasPrefix:[self tempDirectory]]) {
-      [[NSFileManager defaultManager] removeItemAtPath:cleanPrevious error:nil];
-    }
+    [self removeIfTemporary:cleanPrevious];
   }
 
-  NSMutableDictionary *asset = self.pendingCropAsset ?: [NSMutableDictionary dictionary];
+  // Compressing comes after cropping, so the budget covers the cropped result
+  // rather than the larger frame it was taken from.
+  NSString *compressed = [self compressedPathFor:path mime:@"image/jpeg" options:options];
+  if (compressed == nil) {
+    [self finishWith:[self errorResultWithCode:@"compress_failed"
+                                       message:@"Could not compress the image below maxImageFileSize"]];
+    return;
+  }
+  path = compressed;
+  CGSize dimensions = [self imageDimensionsAtPath:path];
+
+  NSMutableDictionary *asset = pending ?: [NSMutableDictionary dictionary];
   asset[@"uri"] = [@"file://" stringByAppendingString:path];
   asset[@"type"] = @"image/jpeg";
   asset[@"fileName"] = path.lastPathComponent;
-  asset[@"fileSize"] = @(data.length);
-  asset[@"width"] = @(output.size.width * output.scale);
-  asset[@"height"] = @(output.size.height * output.scale);
+  asset[@"fileSize"] = @([[[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil] fileSize]);
+  asset[@"width"] = @(dimensions.width);
+  asset[@"height"] = @(dimensions.height);
   asset[@"cropRect"] = @{
     @"x": @(cropRect.origin.x),
     @"y": @(cropRect.origin.y),
@@ -616,7 +1077,8 @@ RCT_EXPORT_MODULE()
     @"height": @(cropRect.size.height)
   };
   if ([options[@"includeBase64"] boolValue]) {
-    asset[@"base64"] = [data base64EncodedStringWithOptions:0];
+    NSData *finalData = [NSData dataWithContentsOfFile:path];
+    if (finalData) asset[@"base64"] = [finalData base64EncodedStringWithOptions:0];
   }
 
   [self finishWith:@{@"didCancel": @NO, @"assets": @[asset]}];

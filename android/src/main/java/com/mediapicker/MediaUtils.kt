@@ -9,16 +9,41 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.webkit.MimeTypeMap
 import androidx.exifinterface.media.ExifInterface
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.WritableMap
+import com.otaliastudios.transcoder.Transcoder
+import com.otaliastudios.transcoder.TranscoderListener
+import com.otaliastudios.transcoder.strategy.DefaultAudioStrategy
+import com.otaliastudios.transcoder.strategy.DefaultVideoStrategy
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import kotlin.math.sqrt
 
 object MediaUtils {
 
   private const val CACHE_DIR = "rn_media_picker"
+
+  private const val MIN_JPEG_QUALITY = 10
+  private const val MAX_JPEG_QUALITY = 95
+  private const val MIN_IMAGE_EDGE = 64
+
+  // Roughly the bits H.264 needs per pixel per frame to still look acceptable.
+  private const val VIDEO_BITS_PER_PIXEL = 0.12
+  private const val VIDEO_FRAME_RATE = 30
+  private const val MAX_AUDIO_BITRATE = 64_000L
+  private const val MIN_AUDIO_BITRATE = 24_000L
+  private const val MIN_VIDEO_BITRATE = 120_000L
+  private const val MIN_VIDEO_EDGE = 144
+
+  // Aim under the limit rather than at it. An encoder treats an average bitrate
+  // as something to hover around, and key frames and container overhead do not
+  // scale down with it -- targeting the limit exactly measured ~25% over on a
+  // short clip.
+  private const val SIZE_SAFETY_MARGIN = 0.90
 
   fun cacheDir(context: Context): File =
     File(context.cacheDir, CACHE_DIR).apply { if (!exists()) mkdirs() }
@@ -30,6 +55,13 @@ object MediaUtils {
     context.contentResolver.getType(uri) ?: "application/octet-stream"
 
   fun isVideo(mime: String) = mime.startsWith("video/")
+
+  /** For paths that never came from a picker, so there is no resolver to ask. */
+  fun mimeForPath(path: String): String {
+    val extension = path.substringAfterLast('.', "").lowercase()
+    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+      ?: "application/octet-stream"
+  }
 
   fun displayName(context: Context, uri: Uri, fallback: String): String {
     var cursor: Cursor? = null
@@ -173,6 +205,71 @@ object MediaUtils {
     return rotated
   }
 
+  /**
+   * Re-encode until the file fits in [maxBytes]. Quality is searched first
+   * because it costs no pixels; only when even the lowest acceptable quality
+   * still overflows does the frame get halved and searched again.
+   *
+   * Runs after processImage(), so maxWidth/quality have already been honoured
+   * and this only takes away what the byte budget demands.
+   */
+  fun compressImage(context: Context, source: File, mime: String, maxBytes: Long): File {
+    if (maxBytes <= 0L || source.length() <= maxBytes) return source
+    if (mime == "image/gif") return source // re-encoding would drop the animation
+
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(source.absolutePath, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return source
+
+    var width = bounds.outWidth
+    var height = bounds.outHeight
+    var encoded: ByteArray? = null
+
+    while (true) {
+      val decodeOptions = BitmapFactory.Options().apply {
+        inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, width, height)
+      }
+      val decoded = BitmapFactory.decodeFile(source.absolutePath, decodeOptions) ?: break
+      // processImage() strips EXIF whenever it re-encodes, so this is a no-op on
+      // an image it touched and the real rotation on one it passed through.
+      val bitmap = applyExifRotation(source, decoded)
+      encoded = encodeUnderLimit(bitmap, maxBytes)
+      bitmap.recycle()
+      if (encoded != null || minOf(width, height) / 2 < MIN_IMAGE_EDGE) break
+      width /= 2
+      height /= 2
+    }
+
+    val bytes = encoded ?: throw IllegalStateException(
+      "Could not compress the image below $maxBytes bytes"
+    )
+    val output = newCacheFile(context, "jpg")
+    output.writeBytes(bytes)
+    deleteIfOurs(context, source)
+    return output
+  }
+
+  /** Highest JPEG quality that still fits, or null when even the lowest does not. */
+  private fun encodeUnderLimit(bitmap: Bitmap, maxBytes: Long): ByteArray? {
+    var low = MIN_JPEG_QUALITY
+    var high = MAX_JPEG_QUALITY
+    var best: ByteArray? = null
+    while (low <= high) {
+      val quality = (low + high) / 2
+      val bytes = ByteArrayOutputStream().use { stream ->
+        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+        stream.toByteArray()
+      }
+      if (bytes.size <= maxBytes) {
+        best = bytes
+        low = quality + 1
+      } else {
+        high = quality - 1
+      }
+    }
+    return best
+  }
+
   fun imageDimensions(file: File): Pair<Int, Int> {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.absolutePath, bounds)
@@ -205,7 +302,13 @@ object MediaUtils {
 
   // --- video --------------------------------------------------------------
 
-  data class VideoMeta(val width: Int, val height: Int, val durationMs: Long, val bitrate: Long)
+  data class VideoMeta(
+    val width: Int,
+    val height: Int,
+    val durationMs: Long,
+    val bitrate: Long,
+    val hasAudio: Boolean
+  )
 
   fun videoMeta(file: File): VideoMeta {
     val retriever = MediaMetadataRetriever()
@@ -220,18 +323,136 @@ object MediaUtils {
         width = if (swap) rawH else rawW,
         height = if (swap) rawW else rawH,
         durationMs = read(MediaMetadataRetriever.METADATA_KEY_DURATION),
-        bitrate = read(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+        bitrate = read(MediaMetadataRetriever.METADATA_KEY_BITRATE),
+        hasAudio = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
       )
     } catch (_: Exception) {
-      VideoMeta(0, 0, 0, 0)
+      VideoMeta(0, 0, 0, 0, false)
     } finally {
       try { retriever.release() } catch (_: Exception) {}
     }
   }
 
+  /**
+   * Re-encode to H.264/AAC at a bitrate the clip's own duration can afford.
+   * Returns the original untouched when it already fits, and throws when even
+   * the floor bitrate cannot get under [maxBytes].
+   */
+  fun compressVideo(context: Context, source: File, maxBytes: Long): File {
+    if (maxBytes <= 0L || source.length() <= maxBytes) return source
+
+    val meta = videoMeta(source)
+    val seconds = meta.durationMs / 1000.0
+    if (seconds <= 0.0 || meta.width <= 0 || meta.height <= 0) return source
+
+    // An encoder lands near its requested bitrate rather than on it, so the
+    // budget gets one correction against what the first pass actually produced.
+    var target = (maxBytes * SIZE_SAFETY_MARGIN).toLong()
+    repeat(2) {
+      val output = transcodeToBudget(context, source, meta, seconds, target)
+        ?: return source // the transcoder found nothing worth doing
+      if (output.length() <= maxBytes) {
+        deleteIfOurs(context, source)
+        return output
+      }
+      // Scale the next request by how far this pass actually missed, keeping the
+      // margin so the correction lands inside the limit rather than back on it.
+      target = (target * (maxBytes * SIZE_SAFETY_MARGIN) / output.length()).toLong()
+      output.delete()
+    }
+    throw IllegalStateException("Could not compress the video below $maxBytes bytes")
+  }
+
+  private fun transcodeToBudget(
+    context: Context,
+    source: File,
+    meta: VideoMeta,
+    seconds: Double,
+    budget: Long
+  ): File? {
+    val totalBitrate = (budget * 8 / seconds).toLong()
+    val audioBitrate = if (meta.hasAudio) {
+      (totalBitrate / 4).coerceIn(MIN_AUDIO_BITRATE, MAX_AUDIO_BITRATE)
+    } else {
+      0L
+    }
+    val videoBitrate = (totalBitrate - audioBitrate).coerceAtLeast(MIN_VIDEO_BITRATE)
+
+    val output = newCacheFile(context, "mp4")
+    val builder = Transcoder.into(output.absolutePath)
+      .addDataSource(source.absolutePath)
+      // Required: the builder refuses to build without one. The callbacks stay
+      // empty on purpose -- they are posted to the main looper and can land
+      // after transcode() has already returned, so the outcome is read from the
+      // future and the output file instead, which cannot race.
+      .setListener(object : TranscoderListener {
+        override fun onTranscodeProgress(progress: Double) = Unit
+        override fun onTranscodeCompleted(successCode: Int) = Unit
+        override fun onTranscodeCanceled() = Unit
+        override fun onTranscodeFailed(exception: Throwable) = Unit
+      })
+      .setVideoTrackStrategy(
+        DefaultVideoStrategy.atMost(minorEdgeFor(meta, videoBitrate))
+          .bitRate(videoBitrate)
+          .frameRate(VIDEO_FRAME_RATE)
+          .build()
+      )
+    if (meta.hasAudio) {
+      builder.setAudioTrackStrategy(
+        DefaultAudioStrategy.builder().bitRate(audioBitrate).build()
+      )
+    }
+
+    try {
+      // Already on the worker thread, so block rather than juggle a listener.
+      // TranscodeEngine rethrows, so a failure surfaces as ExecutionException.
+      builder.transcode().get()
+    } catch (e: Exception) {
+      output.delete()
+      throw IllegalStateException(
+        e.cause?.message ?: e.message ?: "Video compression failed", e
+      )
+    }
+
+    // A transcoder that judged the work unnecessary leaves nothing behind.
+    if (!output.exists() || output.length() == 0L) {
+      output.delete()
+      return null
+    }
+    return output
+  }
+
+  /**
+   * The largest frame the video budget can carry, expressed as a limit on the
+   * shorter edge — which is what AtMostResizer measures when handed a single
+   * dimension.
+   */
+  private fun minorEdgeFor(meta: VideoMeta, videoBitrate: Long): Int {
+    val minor = minOf(meta.width, meta.height)
+    val major = maxOf(meta.width, meta.height)
+    val pixels = videoBitrate / (VIDEO_BITS_PER_PIXEL * VIDEO_FRAME_RATE)
+    val wanted = sqrt(pixels * minor / major).toInt().coerceAtLeast(MIN_VIDEO_EDGE)
+
+    // DefaultVideoStrategy passes a track straight through when the frame is not
+    // shrinking, and that test ignores bitrate — so asking for the size the
+    // source already has would hand back the original file unchanged.
+    val ceiling = (minor - 2).coerceAtLeast(2)
+    val edge = minOf(wanted, ceiling)
+    return if (edge % 2 == 0) edge else edge - 1
+  }
+
   // --- misc ---------------------------------------------------------------
 
   fun base64(file: File): String = Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+
+  /**
+   * Replacing a file means dropping the one it replaced — but compressMedia()
+   * takes any path the caller hands it, so only this module's own cache files
+   * are ever removed.
+   */
+  private fun deleteIfOurs(context: Context, file: File) {
+    if (file.absolutePath.startsWith(cacheDir(context).absolutePath)) file.delete()
+  }
 
   fun deleteTemp(context: Context, path: String) {
     val dir = cacheDir(context)

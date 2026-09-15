@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import NativeMediaPicker from './NativeMediaPicker';
-import type { Asset, PickerOptions, PickerResult } from './types';
+import type { Asset, CompressOptions, PickerOptions, PickerResult } from './types';
 
 export * from './types';
 
@@ -13,6 +13,8 @@ const DEFAULTS: Required<
     | 'maxHeight'
     | 'quality'
     | 'forceJpg'
+    | 'maxImageFileSize'
+    | 'maxVideoFileSize'
     | 'includeBase64'
     | 'includeExif'
     | 'includeExtra'
@@ -39,6 +41,8 @@ const DEFAULTS: Required<
   maxHeight: 0,
   quality: 1,
   forceJpg: true,
+  maxImageFileSize: 0,
+  maxVideoFileSize: 0,
   includeBase64: false,
   includeExif: false,
   includeExtra: false,
@@ -86,6 +90,12 @@ function validate(o: PickerOptions): string | null {
   }
   if (o.selectionLimit !== undefined && o.selectionLimit < 0) {
     return 'selectionLimit must be 0 or greater';
+  }
+  if (o.maxImageFileSize !== undefined && o.maxImageFileSize < 0) {
+    return 'maxImageFileSize must be 0 or greater';
+  }
+  if (o.maxVideoFileSize !== undefined && o.maxVideoFileSize < 0) {
+    return 'maxVideoFileSize must be 0 or greater';
   }
   if (o.cropping) {
     // uCrop/CanHub and TOCropViewController both operate on a single still image.
@@ -169,6 +179,37 @@ export async function cropImage(
 }
 
 /**
+ * Shrink a file already on disk below a byte budget, without showing any UI.
+ * Pass `maxImageFileSize` for images, `maxVideoFileSize` for video, or both
+ * when the path could be either. Resolves with a single re-measured asset
+ * pointing at the new file; a file already under budget is returned untouched.
+ */
+export async function compressMedia(
+  path: string,
+  options: CompressOptions = {}
+): Promise<PickerResult> {
+  if (!path) return fail('path is required', 'invalid_options');
+  if (!options.maxImageFileSize && !options.maxVideoFileSize) {
+    return fail(
+      'maxImageFileSize or maxVideoFileSize is required',
+      'invalid_options'
+    );
+  }
+  const invalid = validate(options);
+  if (invalid) return fail(invalid, 'invalid_options');
+
+  try {
+    const raw = await NativeMediaPicker.compressMedia({
+      ...normalize(options),
+      path,
+    });
+    return raw as PickerResult;
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/**
  * Remove temp files created by this module. Call it when you are done with the
  * picked assets — the cache is not cleared automatically.
  */
@@ -176,4 +217,4 @@ export function cleanTempFiles(path?: string): Promise<void> {
   return NativeMediaPicker.cleanTempFiles(path ?? '');
 }
 
-export type { Asset, PickerOptions, PickerResult };
+export type { Asset, CompressOptions, PickerOptions, PickerResult };

@@ -132,6 +132,47 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     startCrop(activity, Uri.fromFile(File(path.removePrefix("file://"))), options)
   }
 
+  override fun compressMedia(options: ReadableMap, promise: Promise) {
+    val path = options.getString("path")
+    if (path.isNullOrBlank()) {
+      return promise.resolve(errorResult("invalid_options", "path is required"))
+    }
+
+    // No UI, so this neither claims the picker slot nor minds that one is open.
+    worker.execute {
+      try {
+        val file = File(path.removePrefix("file://"))
+        if (!file.exists()) {
+          return@execute promise.resolve(
+            errorResult("cannot_process_asset", "There is no file at $path")
+          )
+        }
+        val mime = MediaUtils.mimeForPath(file.name)
+        if (!mime.startsWith("image/") && !mime.startsWith("video/")) {
+          return@execute promise.resolve(
+            errorResult("invalid_options", "$path is neither an image nor a video")
+          )
+        }
+
+        val processed = try {
+          compressToBudget(Processed(file, mime, file.name), options)
+        } catch (e: Exception) {
+          return@execute promise.resolve(
+            errorResult("compress_failed", e.message ?: "Could not compress the media")
+          )
+        }
+
+        val assets = Arguments.createArray()
+        assets.pushMap(buildAsset(processed, path, options, null))
+        promise.resolve(successResult(assets))
+      } catch (e: Exception) {
+        promise.resolve(
+          errorResult("cannot_process_asset", e.message ?: "Could not read the file")
+        )
+      }
+    }
+  }
+
   override fun cleanTempFiles(path: String, promise: Promise) {
     worker.execute {
       try {
@@ -224,11 +265,42 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
       return
     }
 
+    val compressed = try {
+      files.map { compressToBudget(it, options) }
+    } catch (e: Exception) {
+      return finish(errorResult("compress_failed", e.message ?: "Could not compress the media"))
+    }
+
     val assets = Arguments.createArray()
-    files.forEachIndexed { index, processed ->
+    compressed.forEachIndexed { index, processed ->
       assets.pushMap(buildAsset(processed, originalUris.getOrNull(index), options, null))
     }
     finish(successResult(assets))
+  }
+
+  /**
+   * The last thing that happens to an asset before it is reported: shrink it
+   * under the caller's byte budget. Deliberately after processImage() and after
+   * any crop, so the size it measures is the size that gets uploaded.
+   */
+  private fun compressToBudget(processed: Processed, options: ReadableMap): Processed {
+    val isVideo = MediaUtils.isVideo(processed.mime)
+    val file = if (isVideo) {
+      MediaUtils.compressVideo(reactContext, processed.file, longOr(options, "maxVideoFileSize"))
+    } else {
+      MediaUtils.compressImage(
+        reactContext, processed.file, processed.mime, longOr(options, "maxImageFileSize")
+      )
+    }
+    if (file == processed.file) return processed
+
+    // Compressing always lands on JPEG or MP4, and the reported name has to
+    // follow the bytes the same way it does after a re-encode.
+    return Processed(
+      file,
+      if (isVideo) "video/mp4" else "image/jpeg",
+      MediaUtils.withExtension(processed.displayName, file.extension)
+    )
   }
 
   private data class Processed(val file: File, val mime: String, val displayName: String)
@@ -500,7 +572,13 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
             putInt("height", it.height())
           }
         }
-        val processed = Processed(file, "image/jpeg", file.name)
+        val processed = try {
+          compressToBudget(Processed(file, "image/jpeg", file.name), options)
+        } catch (e: Exception) {
+          return@execute finish(
+            errorResult("compress_failed", e.message ?: "Could not compress the image")
+          )
+        }
         val assets = Arguments.createArray()
         assets.pushMap(buildAsset(processed, pendingOriginalUri, options, cropRect))
         finish(successResult(assets))
@@ -584,6 +662,9 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
 
   private fun intOr(map: ReadableMap, key: String, fallback: Int) =
     if (map.hasKey(key) && !map.isNull(key)) map.getInt(key) else fallback
+
+  private fun longOr(map: ReadableMap, key: String, fallback: Long = 0L) =
+    if (map.hasKey(key) && !map.isNull(key)) map.getDouble(key).toLong() else fallback
 
   private fun doubleOr(map: ReadableMap, key: String, fallback: Double) =
     if (map.hasKey(key) && !map.isNull(key)) map.getDouble(key) else fallback

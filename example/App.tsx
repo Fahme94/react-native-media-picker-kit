@@ -12,12 +12,21 @@ import {
 import {
   captureMedia,
   cleanTempFiles,
+  compressMedia,
   pickMedia,
   type PickerOptions,
   type PickerResult,
 } from 'react-native-media-picker-kit';
 
-type Case = {label: string; options: PickerOptions; capture?: boolean};
+/** `compress` picks first with no budget, then compresses what came back. */
+type Case = {
+  label: string;
+  options: PickerOptions;
+  capture?: boolean;
+  compress?: boolean;
+};
+
+const MB = 1024 * 1024;
 
 const CASES: Case[] = [
   {label: 'Photo', options: {mediaType: 'photo'}},
@@ -54,6 +63,43 @@ const CASES: Case[] = [
     options: {mediaType: 'photo', maxWidth: 400, maxHeight: 400, quality: 0.5},
   },
   {label: 'Photos ×3', options: {mediaType: 'photo', selectionLimit: 3}},
+  {
+    label: 'Photo ≤500KB',
+    options: {mediaType: 'photo', maxImageFileSize: 500 * 1024},
+  },
+  {
+    label: 'Video ≤5MB',
+    options: {mediaType: 'video', maxVideoFileSize: 5 * MB},
+  },
+  {
+    label: 'Mixed ≤1MB/≤5MB',
+    options: {
+      mediaType: 'mixed',
+      selectionLimit: 5,
+      maxImageFileSize: 1 * MB,
+      maxVideoFileSize: 5 * MB,
+    },
+  },
+  {
+    label: 'Shoot ≤300KB',
+    options: {mediaType: 'photo', maxImageFileSize: 300 * 1024},
+    capture: true,
+  },
+  {
+    label: 'Crop then ≤200KB',
+    options: {
+      mediaType: 'photo',
+      cropping: true,
+      cropWidth: 1000,
+      cropHeight: 1000,
+      maxImageFileSize: 200 * 1024,
+    },
+  },
+  {
+    label: 'Pick → compress ≤300KB',
+    options: {maxImageFileSize: 300 * 1024, maxVideoFileSize: 2 * MB},
+    compress: true,
+  },
 ];
 
 /**
@@ -78,8 +124,32 @@ export default function App() {
       .catch(e => setLog(`native round trip FAILED: ${String(e)}`));
   }, []);
 
-  const run = async (label: string, options: PickerOptions, capture?: boolean) => {
+  const run = async (
+    label: string,
+    options: PickerOptions,
+    capture?: boolean,
+    compress?: boolean,
+  ) => {
     setLog(`${label}: running…`);
+
+    if (compress) {
+      // Two steps on purpose: pick at full size, then compress the file on
+      // disk, so the before/after sizes are both visible.
+      const picked = await pickMedia({mediaType: 'mixed'});
+      const source = picked.assets[0];
+      if (!source?.uri) {
+        setLog(`${label}\n${JSON.stringify(picked, summarize, 2)}`);
+        return;
+      }
+      setLog(`${label}: compressing ${source.fileSize} bytes…`);
+      const result = await compressMedia(source.uri, options);
+      setLog(
+        `${label}\nbefore: ${source.fileSize} bytes\n` +
+          `${JSON.stringify(result, summarize, 2)}`,
+      );
+      return;
+    }
+
     const result: PickerResult = capture
       ? await captureMedia(options)
       : await pickMedia(options);
@@ -89,11 +159,11 @@ export default function App() {
   return (
     <SafeAreaView style={styles.root}>
       <View style={styles.buttons}>
-        {CASES.map(({label, options, capture}) => (
+        {CASES.map(({label, options, capture, compress}) => (
           <TouchableOpacity
             key={label}
             style={[styles.button, capture && styles.capture]}
-            onPress={() => run(label, options, capture)}>
+            onPress={() => run(label, options, capture, compress)}>
             <Text style={styles.buttonText}>{label}</Text>
           </TouchableOpacity>
         ))}

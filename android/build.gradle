@@ -25,6 +25,9 @@ android {
     // 24 is the floor for the AndroidX backported photo picker path.
     minSdk getExt("minSdkVersion", 24)
     targetSdk getExt("targetSdkVersion", 35)
+    // The compression tests need a real MediaCodec, so they run on a device:
+    // ./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest
+    testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
   }
 
   compileOptions {
@@ -55,4 +58,16 @@ dependencies {
   // to its root build.gradle. This one is on Maven Central, so installing the
   // package is just `yarn add`.
   implementation "com.vanniktech:android-image-cropper:4.6.0"
+
+  // MediaCodec-based transcoder, for maxVideoFileSize. Android exposes no
+  // public transcoding API of its own -- MediaTranscodingManager is @hide --
+  // so the alternative is a hand-rolled MediaCodec/MediaMuxer pipeline. Like
+  // the cropper above, this one is on Maven Central rather than JitPack, so
+  // installing the package stays a plain `yarn add`. Apache-2.0, no FFmpeg,
+  // so no LGPL obligations follow it into consuming apps.
+  implementation "io.deepmedia.community:transcoder-android:0.11.2"
+
+  androidTestImplementation "androidx.test:core:1.6.1"
+  androidTestImplementation "androidx.test:runner:1.6.2"
+  androidTestImplementation "androidx.test.ext:junit:1.2.1"
 }

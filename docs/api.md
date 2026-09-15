@@ -1,6 +1,6 @@
 # API reference
 
-Four exports, all promise-returning, none of which ever reject. Every call resolves with a
+Five exports, all promise-returning, none of which ever reject. Every call resolves with a
 [`PickerResult`](#pickerresult).
 
 ```ts
@@ -8,6 +8,7 @@ import {
   pickMedia,
   captureMedia,
   cropImage,
+  compressMedia,
   cleanTempFiles,
 } from 'react-native-media-picker-kit';
 ```
@@ -53,6 +54,30 @@ const recropped = await cropImage(asset.uri, {
 
 `mediaType`, `selectionLimit` and `cropping` do not apply and are not accepted. An empty `path`
 resolves with `invalid_options`.
+
+### compressMedia(path, options)
+
+Shrinks a file already on disk under a byte budget, with no UI. Useful when the file came from
+somewhere other than this library, or when you only decide on a size limit later.
+
+```ts
+const smaller = await compressMedia(asset.uri, {
+  maxImageFileSize: 500 * 1024,   // 500 KB
+  maxVideoFileSize: 5 * 1024 * 1024,
+});
+```
+
+Pass whichever budget matches the file, or both when it could be either — at least one is required,
+otherwise the call resolves with `invalid_options`, as it does for an empty `path` or a path that is
+neither an image nor a video. Resolves with exactly one re-measured asset.
+
+This function **only compresses**. It takes `maxImageFileSize`, `maxVideoFileSize`, `includeBase64`
+and `includeExif` — the `CompressOptions` type — and nothing else: `maxWidth`, `quality` and
+`forceJpg` belong to picking, and honouring them here would mean a file already under budget did not
+come back untouched after all.
+
+Unlike the picker functions it never opens any UI, so it works while a picker is open and is never
+`picker_busy`. It also never deletes the file you hand it. See [Compression](compression.md).
 
 ### cleanTempFiles(path?)
 
@@ -131,6 +156,7 @@ body.append('file', {
 | `camera_unavailable` | No camera, or this camera cannot record video. |
 | `cannot_process_asset` | The file could not be read or copied. |
 | `crop_failed` | The cropper could not encode or write the result. |
+| `compress_failed` | The file could not be brought under `maxImageFileSize` / `maxVideoFileSize`. See [Compression](compression.md). |
 | `picker_busy` | A picker is already open. |
 | `no_library_permission` | Photo library access denied (`includeExtra` on iOS). |
 | `others` | Anything else; read `errorMessage`. |
@@ -157,7 +183,17 @@ side always receives a fully populated object.
 | `quality` | `number` | `1` | JPEG quality `0..1` |
 | `forceJpg` | `boolean` | `true` | Convert HEIC/HEIF/PNG output to JPEG |
 
-These apply to images only. Video is never re-encoded.
+These apply to images only.
+
+### File size
+
+| Option | Type | Default | |
+| --- | --- | --- | --- |
+| `maxImageFileSize` | `number` | `0` | Compress images until the file fits in this many **bytes**. `0` means no limit |
+| `maxVideoFileSize` | `number` | `0` | Same for video, which is re-encoded to H.264/AAC. `0` means no limit, and video is otherwise never re-encoded |
+
+Applied last, after the image options above and after any crop, so the budget covers the bytes you
+actually upload. See [Compression](compression.md).
 
 ### Extras
 

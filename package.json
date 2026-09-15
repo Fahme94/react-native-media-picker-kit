@@ -24,6 +24,7 @@
     "app.plugin.js",
     "plugin",
     "!android/build",
+    "!android/src/androidTest",
     "!android/.gradle",
     "!android/.settings",
     "!android/.cxx",
