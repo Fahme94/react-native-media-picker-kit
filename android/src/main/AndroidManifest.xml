@@ -16,9 +16,14 @@
       FileUriExposureException on API 24+. The authority is namespaced with
       ${applicationId} so it cannot collide with the host app's own provider,
       and the merger wires it up without the app touching its manifest.
+
+      android:name points at MediaPickerFileProvider rather than the bare
+      androidx.core.content.FileProvider because the merger keys <provider> by
+      android:name: sharing that name with another dependency fails the build on
+      the differing authorities. See MediaPickerFileProvider.kt.
     -->
     <provider
-      android:name="androidx.core.content.FileProvider"
+      android:name="com.mediapicker.MediaPickerFileProvider"
       android:authorities="${applicationId}.mediapickerprovider"
       android:exported="false"
       android:grantUriPermissions="true">

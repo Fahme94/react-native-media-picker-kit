@@ -36,6 +36,13 @@ scoped to its own cache directory, because capture intents cannot be handed a `f
 24+. It is merged into your manifest automatically and is namespaced to your application id, so it
 cannot collide with another app's provider.
 
+The provider is declared as `com.mediapicker.MediaPickerFileProvider`, a subclass, rather than as
+`androidx.core.content.FileProvider` directly. The manifest merger keys `<provider>` elements by
+`android:name`, so two dependencies that both declare the bare `androidx.core.content.FileProvider`
+fail your build on their differing `android:authorities` even though those authorities could never
+clash at runtime. Owning a distinct class name keeps this library out of that fight, and means you
+never need a `tools:replace` on the provider in your own manifest.
+
 ## iOS
 
 Add these to `Info.plist`, or let the [Expo config plugin](expo.md) write them.
