@@ -10,6 +10,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.os.CancellationSignal
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
@@ -194,12 +195,20 @@ class CompressionTest {
 
   @Test
   fun videoIsBroughtUnderTheBudget() {
-    val budget = 120L * 1024
     val source = writeTestVideo(1280, 720, 90, 30)
-    assertTrue("fixture is already under budget, so this proves nothing", source.length() > budget)
+    // Read before compressing: a successful compress deletes the file it replaced.
+    val sourceBytes = source.length()
+    // Derived from the fixture rather than a fixed number, and a modest 4x ask.
+    // How far an encoder overshoots its requested bitrate is device-specific and
+    // grows as the bitrate falls, so a tight budget tests the encoder on this
+    // particular device rather than this library's behaviour. A 300 KB budget
+    // here passed on the emulator's software encoder and failed on a Pixel 7 Pro.
+    val budget = sourceBytes / 4
+    assertTrue("fixture is already under budget, so this proves nothing", sourceBytes > budget)
 
     val out = MediaUtils.compressVideo(context, source, budget)
     assertTrue("video is over maxVideoFileSize: ${out.length()}", out.length() <= budget)
+    assertTrue("nothing was actually compressed", out.length() < sourceBytes)
 
     // Still a playable clip of the same length, not a truncated one that fits.
     val meta = MediaUtils.videoMeta(out)
@@ -208,6 +217,99 @@ class CompressionTest {
       "the clip was truncated instead of compressed: ${meta.durationMs}ms",
       meta.durationMs in 2500..3500
     )
+  }
+
+  /** A long transcode is the one thing a user may want to back out of, so it has
+   *  to stop promptly, hand back something usable, and leave no half-written
+   *  file in the cache. */
+  @Test
+  fun cancellingMidTranscodeReturnsTheOriginalAndLeavesNothingBehind() {
+    val cancel = CancellationSignal()
+    val source = writeTestVideo(1280, 720, 300, 30)
+    val sourceBytes = source.length()
+
+    // The progress callback is the only hook that fires while the encoder is
+    // actually running, which is exactly where a real cancel would arrive.
+    val out = MediaUtils.compressVideo(context, source, sourceBytes / 4, 0L, cancel) { progress ->
+      if (progress > 0.1) cancel.cancel()
+    }
+
+    assertEquals("a cancel should hand back the original", source.absolutePath, out.absolutePath)
+    assertEquals("the original was modified", sourceBytes, out.length())
+
+    val strays = MediaUtils.cacheDir(context).listFiles()
+      ?.filter { it.absolutePath != source.absolutePath }
+      ?.map { it.name } ?: emptyList()
+    assertTrue("a partial transcode was left in the cache: $strays", strays.isEmpty())
+  }
+
+  @Test
+  fun cancellingBeforeItStartsSkipsTheWorkEntirely() {
+    val cancel = CancellationSignal().apply { cancel() }
+    val source = writeTestVideo(320, 240, 30, 30)
+    val out = MediaUtils.compressVideo(context, source, source.length() / 2, 0L, cancel)
+    assertEquals(source.absolutePath, out.absolutePath)
+  }
+
+  /** The progress callback is what a caller drives a spinner from, so it has to
+   *  actually run, stay inside 0..1, and never go backwards. */
+  @Test
+  fun videoCompressionReportsMonotonicProgress() {
+    val reported = mutableListOf<Double>()
+    val source = writeTestVideo(1280, 720, 90, 30)
+    MediaUtils.compressVideo(context, source, source.length() / 4) { reported.add(it) }
+
+    assertTrue("no progress was reported at all", reported.isNotEmpty())
+    assertTrue("progress left 0..1: $reported", reported.all { it in 0.0..1.0 })
+    assertEquals("progress did not finish at 1", 1.0, reported.last(), 0.0001)
+    assertEquals(
+      "progress went backwards: $reported",
+      reported.sorted(), reported
+    )
+  }
+
+  /** A budget under the bitrate floor cannot be met, and must say so rather than
+   *  hand back a file that is still too big to upload. */
+  @Test(expected = IllegalStateException::class)
+  fun unreachableVideoBudgetThrows() {
+    // Well below MIN_VIDEO_BITRATE for a three second clip.
+    MediaUtils.compressVideo(context, writeTestVideo(1280, 720, 90, 30), 20L * 1024)
+  }
+
+  /** The point of the floor: a file that IS over its budget is still skipped,
+   *  because transcoding a whole clip to shave a little off is not worth it. */
+  @Test
+  fun videoOverBudgetButUnderTheFloorIsSkipped() {
+    val source = writeTestVideo(1280, 720, 90, 30)
+    val sourceBytes = source.length()
+    val budget = sourceBytes / 2 // genuinely over budget
+
+    val out = MediaUtils.compressVideo(context, source, budget, minBytes = sourceBytes * 2)
+
+    assertEquals("the floor should have skipped it", source.absolutePath, out.absolutePath)
+    assertEquals("the file was modified", sourceBytes, out.length())
+    assertTrue("this only means anything if it was over budget", out.length() > budget)
+  }
+
+  @Test
+  fun imageOverBudgetButUnderTheFloorIsSkipped() {
+    val source = writeTestImage(1200, 900)
+    val sourceBytes = source.length()
+    val budget = sourceBytes / 2
+
+    val out = MediaUtils.compressImage(context, source, "image/jpeg", budget, sourceBytes * 2)
+
+    assertEquals("the floor should have skipped it", source.absolutePath, out.absolutePath)
+    assertTrue("this only means anything if it was over budget", out.length() > budget)
+  }
+
+  /** A floor below the file must not stop real work happening. */
+  @Test
+  fun floorBelowTheFileDoesNotBlockCompression() {
+    val source = writeTestImage(3000, 2000)
+    val budget = 40L * 1024
+    val out = MediaUtils.compressImage(context, source, "image/jpeg", budget, minBytes = 1024)
+    assertTrue("the floor wrongly skipped a file it should have compressed", out.length() <= budget)
   }
 
   @Test

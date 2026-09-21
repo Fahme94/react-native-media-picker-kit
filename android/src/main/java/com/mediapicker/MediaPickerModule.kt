@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
+import android.os.CancellationSignal
 import android.provider.MediaStore
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -49,6 +50,11 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
   private var pendingOriginalUri: String? = null
   private var pendingCaptureFile: File? = null
   private var pendingCaptureIsVideo = false
+
+  // Set for as long as a batch of assets is being compressed, so cancelCompression
+  // has something to cancel. Volatile because it is read from the worker thread
+  // and written from the JS thread.
+  @Volatile private var compressionCancel: CancellationSignal? = null
 
   private val activityListener = object : com.facebook.react.bridge.BaseActivityEventListener() {
     // `activity` is non-null in React Native 0.81+, where this listener became
@@ -155,7 +161,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
         }
 
         val processed = try {
-          compressToBudget(Processed(file, mime, file.name), options)
+          withCancellation { compressToBudget(Processed(file, mime, file.name), options) }
         } catch (e: Exception) {
           return@execute promise.resolve(
             errorResult("compress_failed", e.message ?: "Could not compress the media")
@@ -170,6 +176,25 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
           errorResult("cannot_process_asset", e.message ?: "Could not read the file")
         )
       }
+    }
+  }
+
+  override fun cancelCompression(promise: Promise) {
+    // Safe from any thread, and safe when nothing is running.
+    compressionCancel?.cancel()
+    promise.resolve(null)
+  }
+
+  /**
+   * One signal covers a whole batch, so cancelling during a multi-select stops
+   * the clip being worked on and every one still queued behind it.
+   */
+  private fun <T> withCancellation(block: () -> T): T {
+    compressionCancel = CancellationSignal()
+    try {
+      return block()
+    } finally {
+      compressionCancel = null
     }
   }
 
@@ -266,7 +291,11 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     }
 
     val compressed = try {
-      files.map { compressToBudget(it, options) }
+      withCancellation {
+        files.mapIndexed { index, processed ->
+          compressToBudget(processed, options, index, files.size)
+        }
+      }
     } catch (e: Exception) {
       return finish(errorResult("compress_failed", e.message ?: "Could not compress the media"))
     }
@@ -283,16 +312,49 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
    * under the caller's byte budget. Deliberately after processImage() and after
    * any crop, so the size it measures is the size that gets uploaded.
    */
-  private fun compressToBudget(processed: Processed, options: ReadableMap): Processed {
+  private fun compressToBudget(
+    processed: Processed,
+    options: ReadableMap,
+    index: Int = 0,
+    total: Int = 1
+  ): Processed {
     val isVideo = MediaUtils.isVideo(processed.mime)
+    val minBytes = longOr(options, "minimumFileSizeForCompress")
+    val cancel = compressionCancel
+    val budget = longOr(options, if (isVideo) "maxVideoFileSize" else "maxImageFileSize")
+    val sizeBefore = processed.file.length()
+
     val file = if (isVideo) {
-      MediaUtils.compressVideo(reactContext, processed.file, longOr(options, "maxVideoFileSize"))
+      var lastReported = -1.0
+      MediaUtils.compressVideo(
+        reactContext, processed.file, budget, minBytes, cancel
+      ) { progress ->
+        // The transcoder reports far more often than a UI can use, and every
+        // event costs a bridge crossing, so only whole percents get through.
+        if (progress - lastReported >= 0.01 || progress >= 1.0) {
+          lastReported = progress
+          emitProgress(progress, index, total)
+        }
+      }
     } else {
       MediaUtils.compressImage(
-        reactContext, processed.file, processed.mime, longOr(options, "maxImageFileSize")
+        reactContext, processed.file, processed.mime, budget, minBytes
       )
     }
-    if (file == processed.file) return processed
+
+    if (file == processed.file) {
+      // Unchanged and already inside its budget is the ordinary case; unchanged
+      // while still over it means the work was declined, and the caller needs to
+      // know which, because the file it is about to upload is too big.
+      if (budget <= 0L || sizeBefore <= budget) return processed
+      return processed.copy(
+        compressionSkipped = when {
+          cancel?.isCanceled == true -> "cancelled"
+          minBytes > 0L && sizeBefore < minBytes -> "below_minimum"
+          else -> null
+        }
+      )
+    }
 
     // Compressing always lands on JPEG or MP4, and the reported name has to
     // follow the bytes the same way it does after a re-encode.
@@ -303,7 +365,13 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     )
   }
 
-  private data class Processed(val file: File, val mime: String, val displayName: String)
+  private data class Processed(
+    val file: File,
+    val mime: String,
+    val displayName: String,
+    /** Why this file is still over its budget, when it is. */
+    val compressionSkipped: String? = null
+  )
 
   private fun copyAndProcess(uri: Uri, options: ReadableMap): Processed {
     val mime = MediaUtils.mimeType(reactContext, uri)
@@ -573,7 +641,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
           }
         }
         val processed = try {
-          compressToBudget(Processed(file, "image/jpeg", file.name), options)
+          withCancellation { compressToBudget(Processed(file, "image/jpeg", file.name), options) }
         } catch (e: Exception) {
           return@execute finish(
             errorResult("compress_failed", e.message ?: "Could not compress the image")
@@ -628,7 +696,16 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     }
     originalUri?.let { map.putString("originalPath", it) }
     cropRect?.let { map.putMap("cropRect", it) }
+    processed.compressionSkipped?.let { map.putString("compressionSkipped", it) }
     return map
+  }
+
+  private fun emitProgress(progress: Double, index: Int, total: Int) {
+    emitOnCompressProgress(Arguments.createMap().apply {
+      putDouble("progress", progress.coerceIn(0.0, 1.0))
+      putInt("index", index)
+      putInt("total", total)
+    })
   }
 
   private fun successResult(assets: WritableArray): WritableMap = Arguments.createMap().apply {

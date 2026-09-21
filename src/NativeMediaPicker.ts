@@ -1,6 +1,6 @@
 import type { TurboModule } from 'react-native';
 import { TurboModuleRegistry } from 'react-native';
-import type { UnsafeObject } from 'react-native/Libraries/Types/CodegenTypes';
+import type { EventEmitter, UnsafeObject } from 'react-native/Libraries/Types/CodegenTypes';
 
 /**
  * Codegen spec.
@@ -26,6 +26,22 @@ export interface Spec extends TurboModule {
    * required, as is one of maxImageFileSize / maxVideoFileSize.
    */
   compressMedia(options: UnsafeObject): Promise<UnsafeObject>;
+
+  /**
+   * Fires while a video is being transcoded. Images are not reported: they
+   * finish too quickly for progress to be meaningful.
+   */
+  readonly onCompressProgress: EventEmitter<{
+    progress: number;
+    index: number;
+    total: number;
+  }>;
+
+  /**
+   * Stop the video compression that is currently running, if any. The call it
+   * belongs to still resolves, with the asset uncompressed.
+   */
+  cancelCompression(): Promise<void>;
 
   /** Delete temp files this module created. Empty string clears all of them. */
   cleanTempFiles(path: string): Promise<void>;

@@ -1,6 +1,13 @@
 import { Platform } from 'react-native';
 import NativeMediaPicker from './NativeMediaPicker';
-import type { Asset, CompressOptions, PickerOptions, PickerResult } from './types';
+import type {
+  Asset,
+  CompressionSkipped,
+  CompressOptions,
+  CompressProgress,
+  PickerOptions,
+  PickerResult,
+} from './types';
 
 export * from './types';
 
@@ -15,6 +22,7 @@ const DEFAULTS: Required<
     | 'forceJpg'
     | 'maxImageFileSize'
     | 'maxVideoFileSize'
+    | 'minimumFileSizeForCompress'
     | 'includeBase64'
     | 'includeExif'
     | 'includeExtra'
@@ -43,6 +51,10 @@ const DEFAULTS: Required<
   forceJpg: true,
   maxImageFileSize: 0,
   maxVideoFileSize: 0,
+  // Nothing under 10 MB is compressed unless the caller lowers this. It applies
+  // to images as well as video, and to every entry point including
+  // compressMedia, so a budget is a ceiling only above this size.
+  minimumFileSizeForCompress: 10 * 1024 * 1024,
   includeBase64: false,
   includeExif: false,
   includeExtra: false,
@@ -96,6 +108,12 @@ function validate(o: PickerOptions): string | null {
   }
   if (o.maxVideoFileSize !== undefined && o.maxVideoFileSize < 0) {
     return 'maxVideoFileSize must be 0 or greater';
+  }
+  if (
+    o.minimumFileSizeForCompress !== undefined &&
+    o.minimumFileSizeForCompress < 0
+  ) {
+    return 'minimumFileSizeForCompress must be 0 or greater';
   }
   if (o.cropping) {
     // uCrop/CanHub and TOCropViewController both operate on a single still image.
@@ -210,6 +228,42 @@ export async function compressMedia(
 }
 
 /**
+ * Listen to compression progress. Only video reports progress — images finish
+ * too quickly for it to be meaningful — so a call that compresses no video
+ * emits nothing at all.
+ *
+ * Call it once, near where you show the spinner, and keep the subscription for
+ * as long as you want updates:
+ *
+ * ```ts
+ * useEffect(() => {
+ *   const sub = addCompressProgressListener(({ progress, index, total }) => {
+ *     setLabel(`Compressing ${index + 1} of ${total}: ${Math.round(progress * 100)}%`);
+ *   });
+ *   return () => sub.remove();
+ * }, []);
+ * ```
+ */
+export function addCompressProgressListener(
+  listener: (event: CompressProgress) => void
+): { remove(): void } {
+  return NativeMediaPicker.onCompressProgress(listener);
+}
+
+/**
+ * Stop video compression that is currently running. Safe to call when nothing
+ * is running — it does nothing.
+ *
+ * The call being compressed still resolves normally: you get the asset back
+ * **uncompressed and over its budget**, with `asset.compressionSkipped` set to
+ * `'cancelled'`. A long transcode is the one thing here a user may want to back
+ * out of, so it is a cancel rather than an error.
+ */
+export function cancelCompression(): Promise<void> {
+  return NativeMediaPicker.cancelCompression();
+}
+
+/**
  * Remove temp files created by this module. Call it when you are done with the
  * picked assets — the cache is not cleared automatically.
  */
@@ -217,4 +271,11 @@ export function cleanTempFiles(path?: string): Promise<void> {
   return NativeMediaPicker.cleanTempFiles(path ?? '');
 }
 
-export type { Asset, CompressOptions, PickerOptions, PickerResult };
+export type {
+  Asset,
+  CompressionSkipped,
+  CompressOptions,
+  CompressProgress,
+  PickerOptions,
+  PickerResult,
+};

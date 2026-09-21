@@ -42,14 +42,33 @@ export interface PickerOptions {
    * Compress the output until the file is at most this many bytes. 0 disables
    * it. Runs last, after maxWidth/maxHeight/quality and after any crop, so it
    * is the size the caller actually uploads.
+   *
+   * A ceiling only for files above `minimumFileSizeForCompress`, which defaults
+   * to 10 MB. Set that to 0 to make this an unconditional ceiling.
    */
   maxImageFileSize?: number;
   /**
    * Same, for video: re-encodes to H.264/AAC at a bitrate derived from the
    * clip's duration. 0 disables it, which is the default -- video is never
-   * touched unless this is set.
+   * touched unless this is set. Also subject to
+   * `minimumFileSizeForCompress`.
    */
   maxVideoFileSize?: number;
+
+  /**
+   * Skip compression entirely for files below this many bytes, even when they
+   * are over their budget. **Defaults to 10 MB**, so out of the box nothing
+   * smaller than that is ever compressed, whatever budget you set.
+   *
+   * It applies to images as well as video, and to every call including
+   * `compressMedia`, so a budget is a ceiling only above this size. A file that
+   * is skipped comes back with `compressionSkipped: 'below_minimum'` rather
+   * than an error -- code that only checks `errorCode` will not notice, so
+   * check the field if an over-budget upload matters.
+   *
+   * Set it to 0 to compress whatever is over budget, however small.
+   */
+  minimumFileSizeForCompress?: number;
 
   includeBase64?: boolean;
   includeExif?: boolean;
@@ -89,6 +108,16 @@ export interface PickerOptions {
   cropperCancelText?: string;
 }
 
+/** Reported while a video is being compressed. */
+export interface CompressProgress {
+  /** 0..1 for the asset currently being compressed. Never goes backwards. */
+  progress: number;
+  /** Which asset of the batch this is, from 0. */
+  index: number;
+  /** How many assets are being compressed in this call. */
+  total: number;
+}
+
 /**
  * What `compressMedia` accepts. Deliberately narrower than PickerOptions: only
  * the byte budgets apply, so a file already under budget always comes back
@@ -96,8 +125,19 @@ export interface PickerOptions {
  */
 export type CompressOptions = Pick<
   PickerOptions,
-  'maxImageFileSize' | 'maxVideoFileSize' | 'includeBase64' | 'includeExif'
+  | 'maxImageFileSize'
+  | 'maxVideoFileSize'
+  | 'minimumFileSizeForCompress'
+  | 'includeBase64'
+  | 'includeExif'
 >;
+
+/**
+ * Why an asset came back without being compressed. Present only when the file
+ * is over its budget, so `compressionSkipped == null` means the budget was met
+ * (or none was set).
+ */
+export type CompressionSkipped = 'below_minimum' | 'cancelled';
 
 export interface Asset {
   /** file:// path in app cache. Null when writeTempFile is false (iOS). */
@@ -126,6 +166,11 @@ export interface Asset {
   /** Android: the original content:// uri. iOS: PHAsset localIdentifier. */
   originalPath?: string;
   cropRect?: { x: number; y: number; width: number; height: number };
+  /**
+   * Set only when the file is over its budget because compression was skipped
+   * or stopped. Absent means the budget was met, or none was asked for.
+   */
+  compressionSkipped?: CompressionSkipped;
 }
 
 export interface PickerResult {

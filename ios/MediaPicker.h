@@ -3,7 +3,9 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface MediaPicker : NSObject <NativeMediaPickerSpec>
+// NativeMediaPickerSpecBase rather than NSObject: emitOnCompressProgress is
+// generated onto the base, so events are unavailable without it.
+@interface MediaPicker : NativeMediaPickerSpecBase <NativeMediaPickerSpec>
 @end
 
 NS_ASSUME_NONNULL_END

@@ -20,6 +20,8 @@
             didCropToImage:(UIImage *)image
                   withRect:(CGRect)cropRect
                      angle:(NSInteger)angle;
+- (void)cancelCompression:(void (^)(id))resolve
+                   reject:(void (^)(NSString *, NSString *, NSError *))reject;
 @end
 
 @interface CaptureDelegateTests : XCTestCase
@@ -318,6 +320,87 @@
   [self assertFileBackedAsset:asset];
   XCTAssertEqualObjects(asset[@"width"], @1200, @"an under-budget image should not be downscaled");
   XCTAssertEqualObjects(asset[@"height"], @900);
+}
+
+/// A long transcode is the one thing a user may want to back out of, so it has
+/// to stop promptly and hand back something usable rather than an error.
+- (void)testCancellingMidTranscodeReturnsTheOriginal
+{
+  NSURL *recording = [self writeMovieOfSize:CGSizeMake(1280, 720) frames:300 fps:30];
+  unsigned long long src =
+      [[[NSFileManager defaultManager] attributesOfItemAtPath:recording.path error:nil] fileSize];
+
+  __block NSDictionary *result = nil;
+  XCTestExpectation *done = [self expectationWithDescription:@"capture resolved"];
+  id<MediaPickerProbe> module = [self moduleWithOptions:@{@"maxVideoFileSize": @(src / 4)}
+                                               onResult:^(NSDictionary *r) {
+    result = r;
+    [done fulfill];
+  }];
+
+  // Long enough for the copy to finish and the transcode to be underway, short
+  // enough that it cannot have completed.
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                 dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    [module cancelCompression:^(id r) {} reject:^(NSString *a, NSString *b, NSError *e) {}];
+  });
+
+  [module imagePickerController:[UIImagePickerController new] didFinishPickingMediaWithInfo:@{
+    UIImagePickerControllerMediaType: UTTypeMovie.identifier,
+    UIImagePickerControllerMediaURL: recording}];
+  [self waitForExpectations:@[done] timeout:120];
+
+  NSDictionary *asset = [self onlyAssetOf:result];
+  [self assertFileBackedAsset:asset];
+  XCTAssertEqualObjects(asset[@"compressionSkipped"], @"cancelled",
+                        @"a cancel must say why the file is still over budget");
+  XCTAssertEqualObjects(asset[@"fileSize"], @(src), @"cancel should hand back the original");
+  // Untouched means not transcoded, so it is still the QuickTime copy.
+  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+}
+
+/// The point of the floor: a file that IS over its budget is still skipped,
+/// because transcoding a whole clip to shave a little off is not worth it.
+- (void)testFileOverBudgetButUnderTheFloorIsSkipped
+{
+  NSURL *recording = [self writeMovieOfSize:CGSizeMake(1280, 720) frames:90 fps:30];
+  unsigned long long src =
+      [[[NSFileManager defaultManager] attributesOfItemAtPath:recording.path error:nil] fileSize];
+
+  NSDictionary *result = [self captureWithOptions:@{
+    @"maxVideoFileSize": @(src / 2),              // genuinely over budget
+    @"minimumFileSizeForCompress": @(src * 2),    // but under the floor
+  } info:@{
+    UIImagePickerControllerMediaType: UTTypeMovie.identifier,
+    UIImagePickerControllerMediaURL: recording}];
+
+  NSDictionary *asset = [self onlyAssetOf:result];
+  [self assertFileBackedAsset:asset];
+  XCTAssertEqualObjects(asset[@"fileSize"], @(src), @"the floor should have skipped the transcode");
+  XCTAssertGreaterThan([asset[@"fileSize"] unsignedLongLongValue], src / 2,
+                       @"this only means anything if it was over budget");
+  XCTAssertEqualObjects(asset[@"compressionSkipped"], @"below_minimum",
+                        @"the caller has to be told why this file is over budget");
+  // Untouched means not transcoded, so it is still the QuickTime copy.
+  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+}
+
+/// A floor below the file must not stop real work happening.
+- (void)testFloorBelowTheFileDoesNotBlockCompression
+{
+  const unsigned long long budget = 40 * 1024;
+  NSDictionary *result = [self captureWithOptions:@{
+    @"maxImageFileSize": @(budget),
+    @"minimumFileSizeForCompress": @1024,
+  } info:@{
+    UIImagePickerControllerMediaType: UTTypeImage.identifier,
+    UIImagePickerControllerOriginalImage: [self imageOfSize:CGSizeMake(3000, 2000)]}];
+
+  NSDictionary *asset = [self onlyAssetOf:result];
+  XCTAssertLessThanOrEqual([self sizeOfAsset:asset], budget,
+                           @"the floor wrongly skipped a file it should have compressed");
+  XCTAssertNil(asset[@"compressionSkipped"],
+               @"a file that met its budget must not be reported as skipped");
 }
 
 - (void)testUnreachableImageBudgetReportsCompressFailed

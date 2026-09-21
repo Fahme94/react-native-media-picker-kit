@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import {
+  addCompressProgressListener,
   captureMedia,
   cleanTempFiles,
   compressMedia,
@@ -63,13 +64,24 @@ const CASES: Case[] = [
     options: {mediaType: 'photo', maxWidth: 400, maxHeight: 400, quality: 0.5},
   },
   {label: 'Photos ×3', options: {mediaType: 'photo', selectionLimit: 3}},
+  // minimumFileSizeForCompress defaults to 10 MB, so these would all skip on
+  // anything a phone actually produces. Lowering it is what makes a budget an
+  // unconditional ceiling, and these buttons exist to show the budgets working.
   {
     label: 'Photo ≤500KB',
-    options: {mediaType: 'photo', maxImageFileSize: 500 * 1024},
+    options: {
+      mediaType: 'photo',
+      maxImageFileSize: 500 * 1024,
+      minimumFileSizeForCompress: 0,
+    },
   },
   {
     label: 'Video ≤5MB',
-    options: {mediaType: 'video', maxVideoFileSize: 5 * MB},
+    options: {
+      mediaType: 'video',
+      maxVideoFileSize: 5 * MB,
+      minimumFileSizeForCompress: 0,
+    },
   },
   {
     label: 'Mixed ≤1MB/≤5MB',
@@ -78,11 +90,16 @@ const CASES: Case[] = [
       selectionLimit: 5,
       maxImageFileSize: 1 * MB,
       maxVideoFileSize: 5 * MB,
+      minimumFileSizeForCompress: 0,
     },
   },
   {
     label: 'Shoot ≤300KB',
-    options: {mediaType: 'photo', maxImageFileSize: 300 * 1024},
+    options: {
+      mediaType: 'photo',
+      maxImageFileSize: 300 * 1024,
+      minimumFileSizeForCompress: 0,
+    },
     capture: true,
   },
   {
@@ -93,12 +110,23 @@ const CASES: Case[] = [
       cropWidth: 1000,
       cropHeight: 1000,
       maxImageFileSize: 200 * 1024,
+      minimumFileSizeForCompress: 0,
     },
   },
   {
     label: 'Pick → compress ≤300KB',
-    options: {maxImageFileSize: 300 * 1024, maxVideoFileSize: 2 * MB},
+    options: {
+      maxImageFileSize: 300 * 1024,
+      maxVideoFileSize: 2 * MB,
+      minimumFileSizeForCompress: 0,
+    },
     compress: true,
+  },
+  // The default in action: same budget, floor left alone, so anything under
+  // 10 MB comes back untouched with compressionSkipped: 'below_minimum'.
+  {
+    label: 'Photo ≤500KB (default floor)',
+    options: {mediaType: 'photo', maxImageFileSize: 500 * 1024},
   },
 ];
 
@@ -115,6 +143,19 @@ export default function App() {
   // getEnforcing throws at import time if the TurboModule is not registered,
   // so reaching this state at all is the registration smoke test.
   const [log, setLog] = useState('module loaded');
+  const [progress, setProgress] = useState('');
+
+  // Video compression is the slow part, so this is what a real app would drive
+  // a progress bar from.
+  useEffect(() => {
+    const sub = addCompressProgressListener(({progress: p, index, total}) => {
+      setProgress(
+        `compressing ${index + 1}/${total}: ${Math.round(p * 100)}%` +
+          (p >= 1 ? ' (done)' : ''),
+      );
+    });
+    return () => sub.remove();
+  }, []);
 
   // Round-trips JS -> TurboModule -> native -> resolved promise without any UI,
   // so a failure here is a wiring failure rather than a picker failure.
@@ -176,6 +217,7 @@ export default function App() {
           <Text style={styles.buttonText}>Clean temp files</Text>
         </TouchableOpacity>
       </View>
+      {progress !== '' && <Text style={styles.progress}>{progress}</Text>}
       <ScrollView style={styles.logBox}>
         <Text style={styles.log}>{log}</Text>
       </ScrollView>
@@ -195,6 +237,7 @@ const styles = StyleSheet.create({
   button: {backgroundColor: '#424242', borderRadius: 6, paddingHorizontal: 12, paddingVertical: 10},
   capture: {backgroundColor: '#1b5e20'},
   buttonText: {color: '#fff', fontWeight: '600'},
+  progress: {marginHorizontal: 12, fontWeight: '600', color: '#1b5e20'},
   logBox: {flex: 1, margin: 12, backgroundColor: '#f2f2f2', borderRadius: 6},
   log: {fontFamily: 'Courier', fontSize: 11, padding: 10},
 });

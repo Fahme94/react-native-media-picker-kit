@@ -1,7 +1,8 @@
 # API reference
 
-Five exports, all promise-returning, none of which ever reject. Every call resolves with a
-[`PickerResult`](#pickerresult).
+Seven exports. The ones that do work are promise-returning and none of them ever reject; each
+resolves with a [`PickerResult`](#pickerresult). The other two subscribe to progress and stop work
+in flight.
 
 ```ts
 import {
@@ -9,6 +10,8 @@ import {
   captureMedia,
   cropImage,
   compressMedia,
+  addCompressProgressListener,
+  cancelCompression,
   cleanTempFiles,
 } from 'react-native-media-picker-kit';
 ```
@@ -71,6 +74,11 @@ Pass whichever budget matches the file, or both when it could be either — at l
 otherwise the call resolves with `invalid_options`, as it does for an empty `path` or a path that is
 neither an image nor a video. Resolves with exactly one re-measured asset.
 
+**The 10 MB floor applies here too.** Asking this function for a budget is not enough on its own: a
+3 MB file with `maxImageFileSize: 1024 * 1024` comes back unchanged, with
+`compressionSkipped: 'below_minimum'`. Pass `minimumFileSizeForCompress: 0` when you mean it
+regardless of size.
+
 This function **only compresses**. It takes `maxImageFileSize`, `maxVideoFileSize`, `includeBase64`
 and `includeExif` — the `CompressOptions` type — and nothing else: `maxWidth`, `quality` and
 `forceJpg` belong to picking, and honouring them here would mean a file already under budget did not
@@ -78,6 +86,44 @@ come back untouched after all.
 
 Unlike the picker functions it never opens any UI, so it works while a picker is open and is never
 `picker_busy`. It also never deletes the file you hand it. See [Compression](compression.md).
+
+### addCompressProgressListener(listener)
+
+Reports how far along video compression is, so you can show something other than a frozen spinner.
+Returns a subscription; call `remove()` when you are done with it.
+
+```ts
+useEffect(() => {
+  const sub = addCompressProgressListener(({ progress, index, total }) => {
+    setLabel(`Compressing ${index + 1} of ${total}: ${Math.round(progress * 100)}%`);
+  });
+  return () => sub.remove();
+}, []);
+```
+
+| Field | Type | |
+| --- | --- | --- |
+| `progress` | `number` | `0..1` for the asset being compressed. Never goes backwards |
+| `index` | `number` | Which asset of the batch, from `0` |
+| `total` | `number` | How many assets this call is compressing |
+
+**Only video reports progress.** Images finish too quickly for it to mean anything, so a call that
+compresses no video emits nothing. It is a module-wide subscription rather than a per-call callback,
+so subscribe once where you show the spinner. See [Compression](compression.md#progress).
+
+### cancelCompression()
+
+Stops video compression that is currently running. Safe to call when nothing is.
+
+```ts
+<Button title="Stop" onPress={() => cancelCompression()} />
+```
+
+The call being compressed still resolves normally — you get the asset back
+**uncompressed and over its budget**, with `asset.compressionSkipped` set to `'cancelled'`. A long
+transcode is the one thing here a user may reasonably want to back out of, so it is a cancel rather
+than an error. During a multi-select it stops the clip being worked on and everything queued behind
+it.
 
 ### cleanTempFiles(path?)
 
@@ -134,6 +180,7 @@ for (const asset of result.assets) {             // success
 | `timestamp` | `string?` | With `includeExtra`. **Android only** — epoch milliseconds as a string. |
 | `originalPath` | `string?` | Android: the source `content://`. iOS: the PHAsset identifier. |
 | `cropRect` | `object?` | `{ x, y, width, height }`, present when the asset was cropped. |
+| `compressionSkipped` | `'below_minimum' \| 'cancelled'` | Present **only** when the file is over its budget, saying why. `'below_minimum'` is common, not an edge case: the 10 MB floor is on by default. Absent means the budget was met, or none was asked for. |
 
 Uploading one:
 
@@ -189,11 +236,28 @@ These apply to images only.
 
 | Option | Type | Default | |
 | --- | --- | --- | --- |
-| `maxImageFileSize` | `number` | `0` | Compress images until the file fits in this many **bytes**. `0` means no limit |
+| `maxImageFileSize` | `number` | `0` | Compress images until the file fits in this many **bytes**. `0` means no limit. A ceiling only above `minimumFileSizeForCompress` |
 | `maxVideoFileSize` | `number` | `0` | Same for video, which is re-encoded to H.264/AAC. `0` means no limit, and video is otherwise never re-encoded |
+| `minimumFileSizeForCompress` | `number` | `10485760` | Skip compression for files below this many **bytes**, even when they are over budget. **10 MB by default** — set `0` to always compress what is over |
 
 Applied last, after the image options above and after any crop, so the budget covers the bytes you
 actually upload. See [Compression](compression.md).
+
+### The 10 MB floor, and what it costs you
+
+`minimumFileSizeForCompress` defaults to **10 MB**, so out of the box nothing smaller than that is
+compressed, whatever budget you set. It applies to images as well as video, and to every call
+including `compressMedia`. A 4 MB photo with `maxImageFileSize: 2 * 1024 * 1024` comes back at 4 MB.
+
+Two consequences worth knowing before you rely on a budget:
+
+- **A budget is a ceiling only above the floor.** `asset.fileSize <= maxImageFileSize` holds for
+  files over 10 MB, not below it.
+- **`compress_failed` does not fire below the floor.** A skipped file resolves *successfully*, so
+  code that only checks `errorCode` will upload something larger than it asked for without noticing.
+  Check `asset.compressionSkipped === 'below_minimum'` when that matters.
+
+Set `minimumFileSizeForCompress: 0` to get an unconditional ceiling.
 
 ### Extras
 

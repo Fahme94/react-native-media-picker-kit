@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.CancellationSignal
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.webkit.MimeTypeMap
@@ -44,6 +45,10 @@ object MediaUtils {
   // scale down with it -- targeting the limit exactly measured ~25% over on a
   // short clip.
   private const val SIZE_SAFETY_MARGIN = 0.90
+
+  // A correction pass would otherwise send a progress bar back to zero, so the
+  // first pass owns most of the range and the second finishes it.
+  private val PASS_PROGRESS_RANGE = listOf(0.0 to 0.85, 0.85 to 1.0)
 
   fun cacheDir(context: Context): File =
     File(context.cacheDir, CACHE_DIR).apply { if (!exists()) mkdirs() }
@@ -213,8 +218,17 @@ object MediaUtils {
    * Runs after processImage(), so maxWidth/quality have already been honoured
    * and this only takes away what the byte budget demands.
    */
-  fun compressImage(context: Context, source: File, mime: String, maxBytes: Long): File {
+  fun compressImage(
+    context: Context,
+    source: File,
+    mime: String,
+    maxBytes: Long,
+    minBytes: Long = 0L
+  ): File {
     if (maxBytes <= 0L || source.length() <= maxBytes) return source
+    // Over budget, but not by enough to be worth the work the caller asked us
+    // to avoid. Returns a file that is still over its budget, deliberately.
+    if (minBytes > 0L && source.length() < minBytes) return source
     if (mime == "image/gif") return source // re-encoding would drop the animation
 
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -338,8 +352,18 @@ object MediaUtils {
    * Returns the original untouched when it already fits, and throws when even
    * the floor bitrate cannot get under [maxBytes].
    */
-  fun compressVideo(context: Context, source: File, maxBytes: Long): File {
+  fun compressVideo(
+    context: Context,
+    source: File,
+    maxBytes: Long,
+    minBytes: Long = 0L,
+    cancel: CancellationSignal? = null,
+    onProgress: (Double) -> Unit = {}
+  ): File {
     if (maxBytes <= 0L || source.length() <= maxBytes) return source
+    // Over budget, but not by enough to be worth a whole transcode. Returns a
+    // file that is still over its budget, deliberately.
+    if (minBytes > 0L && source.length() < minBytes) return source
 
     val meta = videoMeta(source)
     val seconds = meta.durationMs / 1000.0
@@ -348,19 +372,31 @@ object MediaUtils {
     // An encoder lands near its requested bitrate rather than on it, so the
     // budget gets one correction against what the first pass actually produced.
     var target = (maxBytes * SIZE_SAFETY_MARGIN).toLong()
-    repeat(2) {
-      val output = transcodeToBudget(context, source, meta, seconds, target)
-        ?: return source // the transcoder found nothing worth doing
+    var produced = 0L
+    repeat(2) { pass ->
+      val (from, to) = PASS_PROGRESS_RANGE[pass]
+      // A cancel and a transcoder that found nothing to do look the same here:
+      // both mean hand back the original. The caller tells them apart by asking
+      // the signal, which is also what decides whether to report it as skipped.
+      val output = transcodeToBudget(context, source, meta, seconds, target, cancel) {
+        onProgress(from + (to - from) * it)
+      } ?: return source
       if (output.length() <= maxBytes) {
+        onProgress(1.0)
         deleteIfOurs(context, source)
         return output
       }
       // Scale the next request by how far this pass actually missed, keeping the
       // margin so the correction lands inside the limit rather than back on it.
-      target = (target * (maxBytes * SIZE_SAFETY_MARGIN) / output.length()).toLong()
+      produced = output.length()
+      target = (target * (maxBytes * SIZE_SAFETY_MARGIN) / produced).toLong()
       output.delete()
     }
-    throw IllegalStateException("Could not compress the video below $maxBytes bytes")
+    // How far it got matters when this fails: how much an encoder overshoots its
+    // requested bitrate is device-specific, so the gap is the useful diagnostic.
+    throw IllegalStateException(
+      "Could not compress the video below $maxBytes bytes; closest was $produced"
+    )
   }
 
   private fun transcodeToBudget(
@@ -368,8 +404,12 @@ object MediaUtils {
     source: File,
     meta: VideoMeta,
     seconds: Double,
-    budget: Long
+    budget: Long,
+    cancel: CancellationSignal?,
+    onProgress: (Double) -> Unit
   ): File? {
+    if (cancel?.isCanceled == true) return null
+
     val totalBitrate = (budget * 8 / seconds).toLong()
     val audioBitrate = if (meta.hasAudio) {
       (totalBitrate / 4).coerceIn(MIN_AUDIO_BITRATE, MAX_AUDIO_BITRATE)
@@ -386,7 +426,11 @@ object MediaUtils {
       // after transcode() has already returned, so the outcome is read from the
       // future and the output file instead, which cannot race.
       .setListener(object : TranscoderListener {
-        override fun onTranscodeProgress(progress: Double) = Unit
+        // Progress is the one callback worth reading. The others stay empty:
+        // they are posted to the main looper and can land after transcode() has
+        // already returned, so the outcome is still read from the future and the
+        // output file, which cannot race.
+        override fun onTranscodeProgress(progress: Double) = onProgress(progress)
         override fun onTranscodeCompleted(successCode: Int) = Unit
         override fun onTranscodeCanceled() = Unit
         override fun onTranscodeFailed(exception: Throwable) = Unit
@@ -403,15 +447,24 @@ object MediaUtils {
       )
     }
 
+    val future = builder.transcode()
+    // TranscodeEngine treats an interrupt as a cancel rather than a failure, so
+    // cancelling the future is the supported way to stop it part-way.
+    cancel?.setOnCancelListener { future.cancel(true) }
     try {
       // Already on the worker thread, so block rather than juggle a listener.
       // TranscodeEngine rethrows, so a failure surfaces as ExecutionException.
-      builder.transcode().get()
+      future.get()
     } catch (e: Exception) {
       output.delete()
+      // A cancelled job is not a failed one: the caller asked for this, and
+      // returning null hands the original back instead of raising.
+      if (cancel?.isCanceled == true) return null
       throw IllegalStateException(
         e.cause?.message ?: e.message ?: "Video compression failed", e
       )
+    } finally {
+      cancel?.setOnCancelListener(null)
     }
 
     // A transcoder that judged the work unnecessary leaves nothing behind.

@@ -13,8 +13,11 @@ Pick photos and videos in React Native — from the gallery **without asking for
 
 - **Pick a photo, or take one with the camera.** One call opens the gallery, one opens the camera.
 - **Pick a video, or record one.** The same calls. You only change `mediaType`.
-- **Make files smaller before you upload them.** Give it a maximum size and the photo or video you
-  get back is under it.
+- **Make files smaller before you upload them.** Give it a maximum size and anything over 10 MB comes
+  back under it. Smaller files are skipped by default, because the work usually costs more than it
+  saves — one option turns that off.
+- **Progress you can show the user.** Video compression reports how far along it is, so a long
+  transcode does not look like a frozen app.
 - **Crop images without adding another library.** Turn cropping on and the user gets a crop screen
   after picking or shooting.
 - **No permission prompt to pick.** Picking from the gallery asks the user for nothing on either
@@ -129,7 +132,7 @@ Both dimensions given means the output is resized to exactly that. See [Cropping
 
 ### Compress to a size your backend accepts
 
-Give it a byte budget and the asset that comes back fits it:
+Give it a byte budget and anything over 10 MB comes back fitting it:
 
 ```ts
 const result = await pickMedia({
@@ -140,8 +143,22 @@ const result = await pickMedia({
 ```
 
 Images are re-encoded, video is transcoded to H.264/AAC, and compression runs last — after any
-resize or crop — so the budget covers the exact bytes you upload. Already-small files are left
-alone. There is also `compressMedia(path, options)` for a file you already have. See
+resize or crop — so the budget covers the exact bytes you upload. There is also
+`compressMedia(path, options)` for a file you already have.
+
+**Nothing under 10 MB is compressed by default**, whatever budget you set. That is
+`minimumFileSizeForCompress`, and since typical phone photos are 2–5 MB you will usually want to
+lower it for images:
+
+```ts
+await pickMedia({
+  maxImageFileSize: 2 * 1024 * 1024,
+  minimumFileSizeForCompress: 0,   // compress whatever is over, however small
+});
+```
+
+A skipped file comes back over budget with `asset.compressionSkipped` set to `'below_minimum'` — and
+**no** `errorCode`, so check that field if an oversized upload matters. See
 [Compression](docs/compression.md).
 
 ---
@@ -156,6 +173,8 @@ alone. There is also `compressMedia(path, options)` for a file you already have.
 | Photos, videos, or both in one pick (`mediaType: 'photo' \| 'video' \| 'mixed'`) | ✅ Available |
 | Resize and re-encode on the native side (`maxWidth` / `maxHeight` / `quality` / `forceJpg`) | ✅ Available |
 | Compress to a target file size — images **and video** (`maxImageFileSize` / `maxVideoFileSize`) ([details](docs/compression.md)) | ✅ Available |
+| Compression progress for video, and cancellation part-way (`cancelCompression`) | ✅ Available |
+| Skips files under 10 MB by default, so a short clip is never transcoded to save a little (`minimumFileSizeForCompress`) | ✅ Available |
 | Every asset is a real `file://` in app cache — never a raw `content://` URI | ✅ Available |
 | Read EXIF and asset metadata (`includeExif`, `includeExtra`) | ✅ Available |
 | Temp-file lifecycle API — `cleanTempFiles()` ([details](docs/temp-files.md)) | ✅ Available |
