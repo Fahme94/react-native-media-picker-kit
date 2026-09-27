@@ -1,42 +1,58 @@
-export type MediaType = 'photo' | 'video' | 'mixed';
+export const MediaType = {
+  photo: "photo",
+  video: "video",
+  mixed: "mixed",
+} as const
 
-export type CameraType = 'back' | 'front';
+export type MediaType = (typeof MediaType)[keyof typeof MediaType]
 
-export type VideoQuality = 'low' | 'high';
+export const CameraType = {
+  back: "back",
+  front: "front",
+} as const
+
+export type CameraType = (typeof CameraType)[keyof typeof CameraType]
+
+export const VideoQuality = {
+  low: "low",
+  high: "high",
+} as const
+
+export type VideoQuality = (typeof VideoQuality)[keyof typeof VideoQuality]
 
 export type PresentationStyle =
-  | 'currentContext'
-  | 'pageSheet'
-  | 'fullScreen'
-  | 'formSheet'
-  | 'overFullScreen';
+  | "currentContext"
+  | "pageSheet"
+  | "fullScreen"
+  | "formSheet"
+  | "overFullScreen"
 
 export type ErrorCode =
-  | 'permission'
-  | 'no_library_permission'
-  | 'cannot_process_asset'
-  | 'crop_failed'
-  | 'compress_failed'
-  | 'camera_unavailable'
-  | 'invalid_options'
-  | 'picker_busy'
-  | 'others';
+  | "permission"
+  | "no_library_permission"
+  | "cannot_process_asset"
+  | "crop_failed"
+  | "compress_failed"
+  | "camera_unavailable"
+  | "invalid_options"
+  | "picker_busy"
+  | "others"
 
 export interface PickerOptions {
   /** Default 'photo'. */
-  mediaType?: MediaType;
+  mediaType?: MediaType
   /** Default 1. Use 0 for unlimited (iOS 14+ / Android 13+). */
-  selectionLimit?: number;
+  selectionLimit?: number
   /** Android only. Restrict the SAF fallback picker, e.g. ['image/jpeg']. */
-  restrictMimeTypes?: string[];
+  restrictMimeTypes?: string[]
 
   /** Downscale the longest edge of picked images. */
-  maxWidth?: number;
-  maxHeight?: number;
+  maxWidth?: number
+  maxHeight?: number
   /** JPEG quality 0..1. Default 1 (no re-encode unless resizing). */
-  quality?: number;
+  quality?: number
   /** Convert HEIC/HEIF/PNG output to JPEG. Default true. */
-  forceJpg?: boolean;
+  forceJpg?: boolean
 
   /**
    * Compress the output until the file is at most this many bytes. 0 disables
@@ -46,14 +62,14 @@ export interface PickerOptions {
    * A ceiling only for files above `minimumFileSizeForCompress`, which defaults
    * to 10 MB. Set that to 0 to make this an unconditional ceiling.
    */
-  maxImageFileSize?: number;
+  maxImageFileSize?: number
   /**
    * Same, for video: re-encodes to H.264/AAC at a bitrate derived from the
    * clip's duration. 0 disables it, which is the default -- video is never
    * touched unless this is set. Also subject to
    * `minimumFileSizeForCompress`.
    */
-  maxVideoFileSize?: number;
+  maxVideoFileSize?: number
 
   /**
    * Skip compression entirely for files below this many bytes, even when they
@@ -68,54 +84,54 @@ export interface PickerOptions {
    *
    * Set it to 0 to compress whatever is over budget, however small.
    */
-  minimumFileSizeForCompress?: number;
+  minimumFileSizeForCompress?: number
 
-  includeBase64?: boolean;
-  includeExif?: boolean;
+  includeBase64?: boolean
+  includeExif?: boolean
   /** Include `id` and `timestamp`. May require library permission. */
-  includeExtra?: boolean;
+  includeExtra?: boolean
   /** iOS only. Skip writing a temp file when you only need base64. */
-  writeTempFile?: boolean;
+  writeTempFile?: boolean
   /** iOS only. */
-  presentationStyle?: PresentationStyle;
+  presentationStyle?: PresentationStyle
 
   /**
    * captureMedia only. Which camera to open. Honoured exactly on iOS; on
    * Android it is a hint the camera app is free to ignore, because the capture
    * intents have no standard lens-selection extra.
    */
-  cameraType?: CameraType;
+  cameraType?: CameraType
   /** captureMedia only, video. Maximum recording length in seconds. */
-  durationLimit?: number;
+  durationLimit?: number
   /** captureMedia only, video. Default 'high'. */
-  videoQuality?: VideoQuality;
+  videoQuality?: VideoQuality
 
   /**
    * Cropping is only valid with mediaType 'photo' and selectionLimit 1.
    * Any other combination rejects with `invalid_options`.
    */
-  cropping?: boolean;
+  cropping?: boolean
   /** Target crop size. Omit both for a free-form crop. */
-  cropWidth?: number;
-  cropHeight?: number;
-  freeStyleCropEnabled?: boolean;
-  cropperCircleOverlay?: boolean;
-  cropperToolbarTitle?: string;
+  cropWidth?: number
+  cropHeight?: number
+  freeStyleCropEnabled?: boolean
+  cropperCircleOverlay?: boolean
+  cropperToolbarTitle?: string
   /** Hex, e.g. '#424242'. Android toolbar / iOS accent. */
-  cropperToolbarColor?: string;
-  cropperActiveWidgetColor?: string;
-  cropperChooseText?: string;
-  cropperCancelText?: string;
+  cropperToolbarColor?: string
+  cropperActiveWidgetColor?: string
+  cropperChooseText?: string
+  cropperCancelText?: string
 }
 
 /** Reported while a video is being compressed. */
 export interface CompressProgress {
   /** 0..1 for the asset currently being compressed. Never goes backwards. */
-  progress: number;
+  progress: number
   /** Which asset of the batch this is, from 0. */
-  index: number;
+  index: number
   /** How many assets are being compressed in this call. */
-  total: number;
+  total: number
 }
 
 /**
@@ -125,57 +141,57 @@ export interface CompressProgress {
  */
 export type CompressOptions = Pick<
   PickerOptions,
-  | 'maxImageFileSize'
-  | 'maxVideoFileSize'
-  | 'minimumFileSizeForCompress'
-  | 'includeBase64'
-  | 'includeExif'
->;
+  | "maxImageFileSize"
+  | "maxVideoFileSize"
+  | "minimumFileSizeForCompress"
+  | "includeBase64"
+  | "includeExif"
+>
 
 /**
  * Why an asset came back without being compressed. Present only when the file
  * is over its budget, so `compressionSkipped == null` means the budget was met
  * (or none was set).
  */
-export type CompressionSkipped = 'below_minimum' | 'cancelled';
+export type CompressionSkipped = "below_minimum" | "cancelled"
 
 export interface Asset {
   /** file:// path in app cache. Null when writeTempFile is false (iOS). */
-  uri: string | null;
-  fileName: string;
+  uri: string | null
+  fileName: string
   /** Bytes. */
-  fileSize: number;
+  fileSize: number
   /** MIME type. */
-  type: string;
-  width: number;
-  height: number;
+  type: string
+  width: number
+  height: number
   /** Video only. Milliseconds. */
-  duration?: number;
+  duration?: number
   /** Video only. Bits per second. */
-  bitrate?: number;
-  base64?: string;
-  exif?: Record<string, unknown>;
+  bitrate?: number
+  base64?: string
+  exif?: Record<string, unknown>
   /**
    * includeExtra only. Platform-specific by necessity: iOS reports the PHAsset
    * localIdentifier, Android the gallery display name, because the Android
    * pickers hand back no stable asset id.
    */
-  id?: string;
+  id?: string
   /** includeExtra only. Android only — epoch milliseconds as a string. */
-  timestamp?: string;
+  timestamp?: string
   /** Android: the original content:// uri. iOS: PHAsset localIdentifier. */
-  originalPath?: string;
-  cropRect?: { x: number; y: number; width: number; height: number };
+  originalPath?: string
+  cropRect?: { x: number; y: number; width: number; height: number }
   /**
    * Set only when the file is over its budget because compression was skipped
    * or stopped. Absent means the budget was met, or none was asked for.
    */
-  compressionSkipped?: CompressionSkipped;
+  compressionSkipped?: CompressionSkipped
 }
 
 export interface PickerResult {
-  didCancel: boolean;
-  errorCode?: ErrorCode;
-  errorMessage?: string;
-  assets: Asset[];
+  didCancel: boolean
+  errorCode?: ErrorCode
+  errorMessage?: string
+  assets: Asset[]
 }
