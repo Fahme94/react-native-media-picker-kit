@@ -11,6 +11,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.CancellationSignal
+import androidx.exifinterface.media.ExifInterface
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
@@ -183,6 +184,23 @@ class CompressionTest {
     val source = writeTestImage(400, 300)
     val out = MediaUtils.compressImage(context, source, "image/jpeg", 8L * 1024 * 1024)
     assertEquals("an under-budget image should be returned as-is", source.absolutePath, out.absolutePath)
+  }
+
+  /**
+   * A portrait camera shot is stored as landscape pixels plus an EXIF rotation.
+   * Sizing it by the stored pixels stretched the upright bitmap to landscape.
+   */
+  @Test
+  fun resizingARotatedPhotoKeepsItUpright() {
+    val source = writeTestImage(1600, 1200)
+    ExifInterface(source.absolutePath).apply {
+      setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_ROTATE_90.toString())
+      saveAttributes()
+    }
+    assertEquals(1200 to 1600, MediaUtils.imageDimensions(source))
+
+    val out = MediaUtils.processImage(context, source, "image/jpeg", 800, 800, 0.8, false)
+    assertEquals(600 to 800, MediaUtils.imageDimensions(out))
   }
 
   @Test(expected = IllegalStateException::class)

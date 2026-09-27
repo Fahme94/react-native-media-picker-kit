@@ -135,27 +135,28 @@ object MediaUtils {
     if (!needsResize && !needsRecode) return source
     if (mime == "image/gif") return source // re-encoding would drop the animation
 
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(source.absolutePath, bounds)
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return source
+    // Sized upright: the bitmap is rotated below, so sizing it by the stored
+    // (sensor-oriented) pixels would squash every portrait camera shot.
+    val (srcW, srcH) = imageDimensions(source)
+    if (srcW <= 0 || srcH <= 0) return source
 
-    val targetW = if (maxWidth > 0) maxWidth else bounds.outWidth
-    val targetH = if (maxHeight > 0) maxHeight else bounds.outHeight
+    val targetW = if (maxWidth > 0) maxWidth else srcW
+    val targetH = if (maxHeight > 0) maxHeight else srcH
     val scale = minOf(
-      targetW.toDouble() / bounds.outWidth,
-      targetH.toDouble() / bounds.outHeight,
+      targetW.toDouble() / srcW,
+      targetH.toDouble() / srcH,
       1.0
     )
 
     val decodeOptions = BitmapFactory.Options().apply {
-      inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, targetW, targetH)
+      inSampleSize = sampleSizeFor(srcW, srcH, targetW, targetH)
     }
     var bitmap = BitmapFactory.decodeFile(source.absolutePath, decodeOptions) ?: return source
     bitmap = applyExifRotation(source, bitmap)
 
     if (scale < 1.0) {
-      val w = (bounds.outWidth * scale).toInt().coerceAtLeast(1)
-      val h = (bounds.outHeight * scale).toInt().coerceAtLeast(1)
+      val w = (srcW * scale).toInt().coerceAtLeast(1)
+      val h = (srcH * scale).toInt().coerceAtLeast(1)
       if (w != bitmap.width || h != bitmap.height) {
         val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
         if (scaled != bitmap) bitmap.recycle()
@@ -189,20 +190,22 @@ object MediaUtils {
     return sample
   }
 
-  private fun applyExifRotation(file: File, bitmap: Bitmap): Bitmap {
-    val degrees = try {
-      when (ExifInterface(file.absolutePath).getAttributeInt(
-        ExifInterface.TAG_ORIENTATION,
-        ExifInterface.ORIENTATION_NORMAL
-      )) {
-        ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-        ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-        ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-        else -> 0f
-      }
-    } catch (_: Exception) {
-      0f
+  private fun exifDegrees(file: File): Float = try {
+    when (ExifInterface(file.absolutePath).getAttributeInt(
+      ExifInterface.TAG_ORIENTATION,
+      ExifInterface.ORIENTATION_NORMAL
+    )) {
+      ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+      ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+      ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+      else -> 0f
     }
+  } catch (_: Exception) {
+    0f
+  }
+
+  private fun applyExifRotation(file: File, bitmap: Bitmap): Bitmap {
+    val degrees = exifDegrees(file)
     if (degrees == 0f) return bitmap
     val matrix = Matrix().apply { postRotate(degrees) }
     val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
@@ -284,10 +287,13 @@ object MediaUtils {
     return best
   }
 
+  /** Upright size — what the image displays as once its EXIF rotation is applied. */
   fun imageDimensions(file: File): Pair<Int, Int> {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.absolutePath, bounds)
-    return bounds.outWidth to bounds.outHeight
+    val degrees = exifDegrees(file)
+    val quarterTurn = degrees == 90f || degrees == 270f
+    return if (quarterTurn) bounds.outHeight to bounds.outWidth else bounds.outWidth to bounds.outHeight
   }
 
   fun exifMap(file: File): WritableMap {
