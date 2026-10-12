@@ -28,6 +28,9 @@ const result = await pickMedia({ mediaType: 'mixed', selectionLimit: 5 });
 
 Returns up to `selectionLimit` assets, or all of them when `selectionLimit: 0`.
 
+To reopen the picker with earlier picks still ticked, pass their `originalPath` values as
+`preselected`; see [Keeping earlier picks selected](preselection.md).
+
 ### captureMedia(options)
 
 Opens the camera. Takes the same options as `pickMedia` and returns the same shape, always with **at
@@ -142,6 +145,7 @@ interface PickerResult {
   errorCode?: ErrorCode;
   errorMessage?: string;
   assets: Asset[];
+  deselected: string[];
 }
 ```
 
@@ -161,7 +165,9 @@ for (const asset of result.assets) {             // success
 }
 ```
 
-`assets` is always an array — empty on cancel or error, never `undefined`.
+`assets` is always an array — empty on cancel or error, never `undefined`. So is `deselected`,
+which is only ever non-empty for a `pickMedia` call with `preselected`
+([details](preselection.md)).
 
 ## Asset
 
@@ -178,7 +184,7 @@ for (const asset of result.assets) {             // success
 | `exif` | `object?` | With `includeExif`. |
 | `id` | `string?` | With `includeExtra`. iOS: the PHAsset local identifier. Android: the gallery display name, because the Android pickers hand back no stable id. |
 | `timestamp` | `string?` | With `includeExtra`. **Android only** — epoch milliseconds as a string. |
-| `originalPath` | `string?` | Android: the source `content://`. iOS: the PHAsset identifier. |
+| `originalPath` | `string?` | Android: the source `content://`. iOS: the PHAsset identifier for gallery picks. The value to pass back in `preselected`. |
 | `cropRect` | `object?` | `{ x, y, width, height }`, present when the asset was cropped. |
 | `compressionSkipped` | `'below_minimum' \| 'cancelled'` | Present **only** when the file is over its budget, saying why. `'below_minimum'` is common, not an edge case: the 10 MB floor is on by default. Absent means the budget was met, or none was asked for. |
 
@@ -218,7 +224,8 @@ side always receives a fully populated object.
 | Option | Type | Default | |
 | --- | --- | --- | --- |
 | `mediaType` | `'photo' \| 'video' \| 'mixed'` | `'photo'` | |
-| `selectionLimit` | `number` | `1` | `0` for unlimited (iOS 14+ / Android 13+) |
+| `selectionLimit` | `number` | `1` | `0` for unlimited (iOS 14+ / Android 13+). With `preselected`, the total including them |
+| `preselected` | `string[]` | `[]` | `pickMedia` only. `originalPath`s to show ticked ([details](preselection.md)) |
 | `restrictMimeTypes` | `string[]` | `[]` | Android SAF fallback only, e.g. `['image/jpeg']` |
 
 ### Image output

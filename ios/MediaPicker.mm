@@ -110,12 +110,16 @@ RCT_EXPORT_MODULE()
 
   NSString *mediaType = options[@"mediaType"] ?: @"photo";
   NSInteger selectionLimit = [options[@"selectionLimit"] integerValue];
-  BOOL includeExtra = [options[@"includeExtra"] boolValue];
 
-  PHPickerConfiguration *config = includeExtra
-      ? [[PHPickerConfiguration alloc] initWithPhotoLibrary:[PHPhotoLibrary sharedPhotoLibrary]]
-      : [[PHPickerConfiguration alloc] init];
+  // The photo library is what makes PHPicker report assetIdentifier, which is
+  // both originalPath and the key for preselectedAssetIdentifiers. It needs no
+  // library permission.
+  PHPickerConfiguration *config =
+      [[PHPickerConfiguration alloc] initWithPhotoLibrary:[PHPhotoLibrary sharedPhotoLibrary]];
   config.selectionLimit = selectionLimit; // 0 means unlimited, same as PHPicker
+  // Preselected items occupy slots of selectionLimit, which is what the caller
+  // asked for: the limit is the total they can hold.
+  config.preselectedAssetIdentifiers = options[@"preselected"] ?: @[];
 
   if ([mediaType isEqualToString:@"photo"]) {
     config.filter = [PHPickerFilter imagesFilter];
@@ -339,6 +343,8 @@ RCT_EXPORT_MODULE()
 {
   [picker dismissViewControllerAnimated:YES completion:nil];
 
+  // Unticking everything and tapping Add also lands here, indistinguishable
+  // from Cancel, so nothing is reported as deselected in that case.
   if (results.count == 0) {
     [self finishWith:[self cancelledResult]];
     return;
@@ -346,6 +352,30 @@ RCT_EXPORT_MODULE()
 
   NSDictionary *options = self.pendingOptions ?: @{};
   BOOL wantsCrop = [options[@"cropping"] boolValue];
+
+  // The picker returns the whole selection, preselected items included. Only
+  // the new ones are copied; the caller already holds the rest.
+  NSArray<NSString *> *preselected = options[@"preselected"] ?: @[];
+  NSSet<NSString *> *preselectedSet = [NSSet setWithArray:preselected];
+  NSMutableSet<NSString *> *kept = [NSMutableSet set];
+  NSMutableArray<PHPickerResult *> *fresh = [NSMutableArray array];
+  for (PHPickerResult *result in results) {
+    if (result.assetIdentifier != nil && [preselectedSet containsObject:result.assetIdentifier]) {
+      [kept addObject:result.assetIdentifier];
+    } else {
+      [fresh addObject:result];
+    }
+  }
+  NSMutableArray<NSString *> *deselected = [NSMutableArray array];
+  for (NSString *identifier in preselected) {
+    if (![kept containsObject:identifier]) [deselected addObject:identifier];
+  }
+  results = fresh;
+
+  if (results.count == 0) {
+    [self finishWith:@{@"didCancel": @NO, @"assets": @[], @"deselected": deselected}];
+    return;
+  }
 
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     NSMutableArray<NSDictionary *> *assets = [NSMutableArray array];
@@ -397,7 +427,7 @@ RCT_EXPORT_MODULE()
       }
     }
 
-    [self finishWith:@{@"didCancel": @NO, @"assets": assets}];
+    [self finishWith:@{@"didCancel": @NO, @"assets": assets, @"deselected": deselected}];
   });
 }
 
@@ -709,9 +739,9 @@ RCT_EXPORT_MODULE()
     }
   }
 
-  if ([options[@"includeExtra"] boolValue] && result.assetIdentifier != nil) {
-    asset[@"id"] = result.assetIdentifier;
+  if (result.assetIdentifier != nil) {
     asset[@"originalPath"] = result.assetIdentifier;
+    if ([options[@"includeExtra"] boolValue]) asset[@"id"] = result.assetIdentifier;
   }
 
   if (writeTempFile) {

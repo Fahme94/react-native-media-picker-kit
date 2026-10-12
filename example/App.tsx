@@ -17,6 +17,7 @@ import {
   compressMedia,
   MediaType,
   pickMedia,
+  type Asset,
   type PickerOptions,
   type PickerResult,
 } from 'react-native-media-picker-kit';
@@ -172,6 +173,8 @@ export default function App() {
   // so reaching this state at all is the registration smoke test.
   const [log, setLog] = useState('module loaded');
   const [progress, setProgress] = useState('');
+  // What 'Keep picking' holds between presses, like an attachment list.
+  const [held, setHeld] = useState<Asset[]>([]);
 
   // Video compression is the slow part, so this is what a real app would drive
   // a progress bar from.
@@ -227,6 +230,30 @@ export default function App() {
     setLog(`${label}\n${JSON.stringify(result, summarize, 2)}`);
   };
 
+  // Reopens the gallery with everything held still ticked, then applies the
+  // result the way an app should: drop what was unticked, append what is new.
+  const keepPicking = async () => {
+    const result = await pickMedia({
+      mediaType: MediaType.photo,
+      selectionLimit: 5,
+      preselected: held.flatMap(a => (a.originalPath ? [a.originalPath] : [])),
+    });
+    if (!result.didCancel && !result.errorCode) {
+      const dropped = held.filter(
+        a => a.originalPath && result.deselected.includes(a.originalPath),
+      );
+      // No path would clear every temp file, so skip assets without one.
+      await Promise.all(
+        dropped.flatMap(a => (a.uri ? [cleanTempFiles(a.uri)] : [])),
+      );
+      setHeld([...held.filter(a => !dropped.includes(a)), ...result.assets]);
+    }
+    setLog(
+      `Keep picking: holding ${held.length} before this pick\n` +
+        JSON.stringify(result, summarize, 2),
+    );
+  };
+
   return (
     <SafeAreaView style={styles.root}>
       <View style={styles.buttons}>
@@ -238,10 +265,14 @@ export default function App() {
             <Text style={styles.buttonText}>{label}</Text>
           </TouchableOpacity>
         ))}
+        <TouchableOpacity style={styles.button} onPress={keepPicking}>
+          <Text style={styles.buttonText}>Keep picking ×5 ({held.length})</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={styles.button}
           onPress={async () => {
             await cleanTempFiles();
+            setHeld([]);
             setLog('cleanTempFiles() resolved');
           }}>
           <Text style={styles.buttonText}>Clean temp files</Text>

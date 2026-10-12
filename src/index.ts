@@ -76,7 +76,13 @@ const DEFAULTS: Required<
 };
 
 function fail(errorMessage: string, errorCode: PickerResult['errorCode'] = 'others'): PickerResult {
-  return { didCancel: false, errorCode, errorMessage, assets: [] };
+  return { didCancel: false, errorCode, errorMessage, assets: [], deselected: [] };
+}
+
+/** Native only reports `deselected` from a pick that sent `preselected`. */
+function toResult(raw: unknown): PickerResult {
+  const result = raw as Omit<PickerResult, 'deselected'> & { deselected?: string[] };
+  return { ...result, deselected: result.deselected ?? [] };
 }
 
 function normalize(options: PickerOptions) {
@@ -84,6 +90,7 @@ function normalize(options: PickerOptions) {
     ...DEFAULTS,
     ...stripUndefined(options),
     restrictMimeTypes: options.restrictMimeTypes ?? [],
+    preselected: options.preselected ?? [],
     platform: Platform.OS,
   };
 }
@@ -125,6 +132,20 @@ function validate(o: PickerOptions): string | null {
       return 'cropping requires selectionLimit 1';
     }
   }
+  if (o.preselected?.length) {
+    // Neither platform can pre-select in single-select mode, and Android throws
+    // when there are more preselected items than the limit.
+    const limit = o.selectionLimit ?? 1;
+    if (limit === 1) {
+      return 'preselected requires selectionLimit 0 or greater than 1';
+    }
+    if (limit > 0 && o.preselected.length > limit) {
+      return 'preselected has more items than selectionLimit';
+    }
+    if (o.cropping) {
+      return 'preselected cannot be combined with cropping';
+    }
+  }
   return null;
 }
 
@@ -134,6 +155,9 @@ function validateCapture(o: PickerOptions): string | null {
   // platforms. Rejecting beats silently picking one of the two.
   if (o.mediaType === 'mixed') {
     return "captureMedia does not support mediaType 'mixed'";
+  }
+  if (o.preselected?.length) {
+    return 'captureMedia does not support preselected';
   }
   if (o.durationLimit !== undefined && o.durationLimit < 0) {
     return 'durationLimit must be 0 or greater';
@@ -153,7 +177,7 @@ export async function pickMedia(options: PickerOptions = {}): Promise<PickerResu
 
   try {
     const raw = await NativeMediaPicker.pickMedia(normalize(options));
-    return raw as PickerResult;
+    return toResult(raw);
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }
@@ -172,7 +196,7 @@ export async function captureMedia(options: PickerOptions = {}): Promise<PickerR
     const raw = await NativeMediaPicker.captureMedia(
       normalize({...options, selectionLimit: 1})
     );
-    return raw as PickerResult;
+    return toResult(raw);
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }
@@ -190,7 +214,7 @@ export async function cropImage(
       ...normalize({ ...options, cropping: true }),
       path,
     });
-    return raw as PickerResult;
+    return toResult(raw);
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }
@@ -221,7 +245,7 @@ export async function compressMedia(
       ...normalize(options),
       path,
     });
-    return raw as PickerResult;
+    return toResult(raw);
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }

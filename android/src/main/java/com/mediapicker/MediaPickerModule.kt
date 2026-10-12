@@ -7,7 +7,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.CancellationSignal
+import android.os.ext.SdkExtensions
+import android.provider.OpenableColumns
 import android.provider.MediaStore
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,12 +44,26 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     private const val RC_CAMERA_PERMISSION = 51004
     // PickMultipleVisualMedia rejects unbounded requests, so "unlimited" is capped.
     private const val UNLIMITED_CAP = 100
+    // MediaStore.EXTRA_PICKER_PRE_SELECTION_URIS, spelled out so compileSdk can
+    // stay below 36. It reached the photo picker in SDK extension R-15, which
+    // Play system updates bring to Android 11+, not only to Android 16.
+    private const val EXTRA_PRE_SELECTION_URIS = "android.provider.extra.PICKER_PRE_SELECTION_URIS"
+    private const val PRE_SELECTION_EXTENSION_VERSION = 15
   }
+
+  /**
+   * How a pick was opened. [shown] is the part of `preselected` the picker was
+   * told to tick, and the only part that can be reported as deselected. [limit]
+   * is the selectionLimit handed to the picker, already lowered by the
+   * preselected items it could not show.
+   */
+  private class PickPlan(val limit: Int, val shown: List<String>)
 
   private val worker = Executors.newSingleThreadExecutor()
 
   private var pendingPromise: Promise? = null
   private var pendingOptions: ReadableMap? = null
+  private var pendingPick: PickPlan? = null
   private var pendingOriginalUri: String? = null
   private var pendingCaptureFile: File? = null
   private var pendingCaptureIsVideo = false
@@ -91,10 +108,18 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
       return promise.resolve(errorResult("picker_busy", "A picker is already open"))
     }
 
+    val plan = planPick(activity, options)
+    if (plan.limit <= 0 && intOr(options, "selectionLimit", 1) > 0) {
+      // Every slot is taken by preselected items the picker cannot show, so
+      // there is nothing the user could add or untick.
+      return promise.resolve(successResult(Arguments.createArray()))
+    }
+
     pendingPromise = promise
     pendingOptions = options
+    pendingPick = plan
     try {
-      activity.startActivityForResult(buildPickIntent(activity, options), RC_PICK)
+      activity.startActivityForResult(buildPickIntent(activity, options, plan), RC_PICK)
     } catch (e: Exception) {
       finish(errorResult("others", e.message ?: "Could not open the picker"))
     }
@@ -211,9 +236,38 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
 
   // --- picking ------------------------------------------------------------
 
-  private fun buildPickIntent(activity: Activity, options: ReadableMap): Intent {
+  private fun planPick(activity: Activity, options: ReadableMap): PickPlan {
+    val requested = intOr(options, "selectionLimit", 1)
+    val preselected = readStringArray(options, "preselected")
+    fun lowered(hidden: Int) = if (requested <= 0) requested else requested - hidden
+
+    if (preselected.isNotEmpty() && supportsPreSelection(activity)) {
+      // An item whose read grant is gone cannot be ticked, so it must not be
+      // reported as unticked either; it just keeps its slot.
+      val shown = preselected.filter { isReadable(Uri.parse(it)) }
+      val limit = lowered(preselected.size - shown.size)
+      // Pre-selection is multi-select only.
+      if (limit != 1) return PickPlan(limit, shown)
+    }
+    return PickPlan(lowered(preselected.size), emptyList())
+  }
+
+  private fun supportsPreSelection(activity: Activity): Boolean =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+      SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= PRE_SELECTION_EXTENSION_VERSION &&
+      ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(activity)
+
+  private fun isReadable(uri: Uri): Boolean = try {
+    reactContext.contentResolver
+      .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+      ?.use { it.moveToFirst() } ?: false
+  } catch (_: Exception) {
+    false
+  }
+
+  private fun buildPickIntent(activity: Activity, options: ReadableMap, plan: PickPlan): Intent {
     val mediaType = options.getString("mediaType") ?: "photo"
-    val limit = if (options.hasKey("selectionLimit")) options.getInt("selectionLimit") else 1
+    val limit = plan.limit
 
     val visualType = when (mediaType) {
       "photo" -> ActivityResultContracts.PickVisualMedia.ImageOnly
@@ -227,7 +281,14 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
         ActivityResultContracts.PickVisualMedia().createIntent(activity, request)
       } else {
         val max = if (limit <= 0) UNLIMITED_CAP else limit
-        ActivityResultContracts.PickMultipleVisualMedia(max).createIntent(activity, request)
+        ActivityResultContracts.PickMultipleVisualMedia(max).createIntent(activity, request).apply {
+          if (plan.shown.isNotEmpty()) {
+            putParcelableArrayListExtra(
+              EXTRA_PRE_SELECTION_URIS,
+              ArrayList(plan.shown.map { Uri.parse(it) })
+            )
+          }
+        }
       }
     }
 
@@ -258,14 +319,30 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
       for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
     } ?: data.data?.let { uris.add(it) }
 
-    if (uris.isEmpty()) return finish(cancelledResult())
-
     val options = pendingOptions ?: return finish(errorResult("others", "Lost picker options"))
+    val plan = pendingPick ?: PickPlan(intOr(options, "selectionLimit", 1), emptyList())
+
+    // With nothing shown ticked, an empty result can only be a cancel. When
+    // items were shown, it means the user unticked all of them.
+    if (uris.isEmpty() && plan.shown.isEmpty()) return finish(cancelledResult())
+
+    // The picker hands back preselected items alongside new ones, and where it
+    // could not show them a re-pick is a duplicate; the caller holds both.
+    val preselected = readStringArray(options, "preselected").toSet()
+    val picked = uris.map { it.toString() }.toSet()
+    val deselected = plan.shown.filterNot { it in picked }
+    val fresh = uris.filterNot { it.toString() in preselected }
+      // The document picker fallback has no limit of its own.
+      .let { if (plan.limit > 0) it.take(plan.limit) else it }
+
+    if (fresh.isEmpty()) {
+      return finish(successResult(Arguments.createArray(), deselected))
+    }
 
     worker.execute {
       try {
-        val files = uris.map { uri -> copyAndProcess(uri, options) }
-        deliver(files, uris.map { it.toString() }, options)
+        val files = fresh.map { uri -> copyAndProcess(uri, options) }
+        deliver(files, fresh.map { it.toString() }, options, deselected)
       } catch (e: Exception) {
         finish(errorResult("cannot_process_asset", e.message ?: "Could not read the selected media"))
       }
@@ -277,7 +354,12 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
    * cropper when cropping was asked for, otherwise resolve with the assets. Runs
    * on the worker thread; the cropper is dispatched back to the UI thread.
    */
-  private fun deliver(files: List<Processed>, originalUris: List<String?>, options: ReadableMap) {
+  private fun deliver(
+    files: List<Processed>,
+    originalUris: List<String?>,
+    options: ReadableMap,
+    deselected: List<String> = emptyList()
+  ) {
     val wantsCrop = options.hasKey("cropping") && options.getBoolean("cropping")
 
     if (wantsCrop && files.size == 1 && !MediaUtils.isVideo(files[0].mime)) {
@@ -304,7 +386,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     compressed.forEachIndexed { index, processed ->
       assets.pushMap(buildAsset(processed, originalUris.getOrNull(index), options, null))
     }
-    finish(successResult(assets))
+    finish(successResult(assets, deselected))
   }
 
   /**
@@ -708,9 +790,13 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     })
   }
 
-  private fun successResult(assets: WritableArray): WritableMap = Arguments.createMap().apply {
+  private fun successResult(
+    assets: WritableArray,
+    deselected: List<String> = emptyList()
+  ): WritableMap = Arguments.createMap().apply {
     putBoolean("didCancel", false)
     putArray("assets", assets)
+    putArray("deselected", Arguments.fromList(deselected))
   }
 
   private fun cancelledResult(): WritableMap = Arguments.createMap().apply {
@@ -729,6 +815,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     val promise = pendingPromise
     pendingPromise = null
     pendingOptions = null
+    pendingPick = null
     pendingOriginalUri = null
     pendingCaptureFile = null
     pendingCaptureIsVideo = false

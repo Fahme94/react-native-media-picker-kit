@@ -151,6 +151,18 @@ const both = await pickMedia({
 }) // 0 = unlimited
 ```
 
+Adding photos in several rounds? Pass what you already hold as `preselected` and the gallery opens
+with it ticked, returning only the new picks plus anything the user unticked
+([details](docs/preselection.md)):
+
+```ts
+const more = await pickMedia({
+  selectionLimit: 10,
+  preselected: photos.map((p) => p.originalPath!),
+})
+// more.assets: new picks only. more.deselected: originalPaths to remove.
+```
+
 Images can be resized and re-encoded on the way out, without a second library:
 
 ```ts
@@ -241,6 +253,7 @@ A skipped file comes back over budget with `asset.compressionSkipped` set to `'b
 | Compression progress for video, and cancellation part-way (`cancelCompression`)                                                  | ✅ Available |
 | Skips files under 10 MB by default, so a short clip is never transcoded to save a little (`minimumFileSizeForCompress`)          | ✅ Available |
 | Every asset is a real `file://` in app cache — never a raw `content://` URI                                                      | ✅ Available |
+| Reopen the gallery with earlier picks still ticked (`preselected`) ([details](docs/preselection.md))                              | ✅ Available |
 | Read EXIF and asset metadata (`includeExif`, `includeExtra`)                                                                     | ✅ Available |
 | Temp-file lifecycle API — `cleanTempFiles()` ([details](docs/temp-files.md))                                                     | ✅ Available |
 | Expo config plugin, no manual `Info.plist` edits ([details](docs/expo.md))                                                       | ✅ Available |
@@ -270,6 +283,7 @@ Reflects the behaviour these libraries document and that this package was built 
 - [**API reference**](docs/api.md) — every option, the `Asset` shape, error codes, and all five exports.
 - [Cropping](docs/cropping.md) — sizing, free-form vs aspect-locked, and what the cropper can't do.
 - [Compression](docs/compression.md) — target file sizes for images and video, and what it costs.
+- [Keeping earlier picks selected](docs/preselection.md) — `preselected`, `deselected`, and what each platform can show.
 - [Permissions](docs/permissions.md) — why the gallery needs none, and the one camera key that isn't optional.
 - [Expo](docs/expo.md) — the bundled config plugin and development builds.
 - [Temp files](docs/temp-files.md) — where assets live and how to clean them up.

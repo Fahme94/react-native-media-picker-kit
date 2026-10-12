@@ -128,6 +128,41 @@ final class PickerUITests: XCTestCase {
     XCTAssertNotNil(json)
   }
 
+  private func confirmMultiSelect() {
+    sleep(1)
+    let add = app.buttons["Add"].exists ? app.buttons["Add"] : app.buttons["Done"]
+    if add.waitForExistence(timeout: 10) { add.tap() }
+  }
+
+  /// Reopening with `preselected` must show the earlier picks ticked, return only
+  /// the new pick, and report the unticked one in `deselected`.
+  func test9PreselectedRoundTrip() throws {
+    tap("Keep picking ×5 (0)")
+    tapPickerCell(0)
+    tapPickerCell(1)
+    confirmMultiSelect()
+    let first = resultText(containing: "holding 0 before", timeout: 45)
+    report("preselect-first", first)
+    XCTAssertNotNil(first)
+    XCTAssertTrue(first!.contains("\"deselected\": []"), "a pick without preselected reported deselected items")
+
+    // Cell 0 opens ticked, so tapping it unticks; cell 2 is new.
+    tap("Keep picking ×5 (2)")
+    tapPickerCell(0)
+    tapPickerCell(2)
+    confirmMultiSelect()
+    let second = resultText(containing: "holding 2 before", timeout: 45)
+    report("preselect-second", second)
+    XCTAssertNotNil(second)
+    let json = try XCTUnwrap(second?.components(separatedBy: "\n").dropFirst().joined(separator: "\n"))
+    let result = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    XCTAssertEqual((result["assets"] as? [Any])?.count, 1, "only the new pick should come back")
+    XCTAssertEqual((result["deselected"] as? [Any])?.count, 1, "the unticked pick should be deselected")
+    XCTAssertTrue(control("Keep picking ×5 (2)").waitForExistence(timeout: 10),
+                  "the app should hold two photos after swapping one")
+  }
+
   /// Recent simulators present a real camera UI for UIImagePickerController but
   /// have no capture pipeline behind it — the shutter never produces an image.
   /// So a simulator can prove that captureMedia opens the camera in the right

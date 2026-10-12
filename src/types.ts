@@ -41,8 +41,29 @@ export type ErrorCode =
 export interface PickerOptions {
   /** Default 'photo'. */
   mediaType?: MediaType
-  /** Default 1. Use 0 for unlimited (iOS 14+ / Android 13+). */
+  /**
+   * Default 1. Use 0 for unlimited (iOS 14+ / Android 13+). With `preselected`
+   * this is the total the caller can hold, preselected items included.
+   */
   selectionLimit?: number
+  /**
+   * pickMedia only. `originalPath` values of assets the caller already holds
+   * from an earlier pick. Where the system picker supports it (iOS 15+, and
+   * Android photo pickers at SDK extension R-15, which includes every Android
+   * 16 device) they open ticked, and the user can untick them.
+   *
+   * On every platform:
+   * - They are never returned again in `assets`, so `assets` is only what is
+   *   new. A re-picked item is dropped where the picker could not show it.
+   * - They count against `selectionLimit`. Where the picker cannot show them,
+   *   the limit handed to it is lowered by their number instead.
+   * - Unticked ones come back in `deselected`, but only where the picker
+   *   really showed them; elsewhere `deselected` is always empty.
+   *
+   * Requires `selectionLimit` 0 or above 1, and cannot be combined with
+   * `cropping`.
+   */
+  preselected?: string[]
   /** Android only. Restrict the SAF fallback picker, e.g. ['image/jpeg']. */
   restrictMimeTypes?: string[]
 
@@ -179,7 +200,11 @@ export interface Asset {
   id?: string
   /** includeExtra only. Android only — epoch milliseconds as a string. */
   timestamp?: string
-  /** Android: the original content:// uri. iOS: PHAsset localIdentifier. */
+  /**
+   * Android: the original content:// uri. iOS: PHAsset localIdentifier for
+   * gallery picks, whether or not `includeExtra` is set. For a gallery pick
+   * this is the value to pass back in `preselected`.
+   */
   originalPath?: string
   cropRect?: { x: number; y: number; width: number; height: number }
   /**
@@ -194,4 +219,11 @@ export interface PickerResult {
   errorCode?: ErrorCode
   errorMessage?: string
   assets: Asset[]
+  /**
+   * `preselected` entries the user unticked in the picker. Always empty where
+   * the picker could not show them ticked, and for every call other than a
+   * pickMedia with `preselected`. A pick that only unticks items succeeds with
+   * empty `assets` and a non-empty `deselected`.
+   */
+  deselected: string[]
 }
