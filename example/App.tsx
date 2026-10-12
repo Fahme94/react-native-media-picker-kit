@@ -12,8 +12,10 @@ import {
 import {
   addCompressProgressListener,
   captureMedia,
+  CameraType,
   cleanTempFiles,
   compressMedia,
+  MediaType,
   pickMedia,
   type PickerOptions,
   type PickerResult,
@@ -30,30 +32,48 @@ type Case = {
 const MB = 1024 * 1024;
 
 const CASES: Case[] = [
-  {label: 'Photo', options: {mediaType: 'photo'}},
+  {label: 'Photo', options: {mediaType: MediaType.photo}},
   {
     label: 'Photo + crop 1:1',
-    options: {mediaType: 'photo', cropping: true, cropWidth: 1000, cropHeight: 1000},
+    options: {
+      mediaType: MediaType.photo,
+      cropping: true,
+      cropWidth: 1000,
+      cropHeight: 1000,
+    },
   },
-  {label: 'Video', options: {mediaType: 'video'}},
-  {label: 'Mixed ×5', options: {mediaType: 'mixed', selectionLimit: 5}},
-  {label: 'Shoot photo', options: {mediaType: 'photo'}, capture: true},
+  {label: 'Video', options: {mediaType: MediaType.video}},
+  {label: 'Mixed ×5', options: {mediaType: MediaType.mixed, selectionLimit: 5}},
+  {label: 'Shoot photo', options: {mediaType: MediaType.photo}, capture: true},
   {
     label: 'Shoot + crop 1:1',
-    options: {mediaType: 'photo', cropping: true, cropWidth: 800, cropHeight: 800},
+    options: {
+      mediaType: MediaType.photo,
+      cropping: true,
+      cropWidth: 800,
+      cropHeight: 800,
+    },
     capture: true,
   },
-  {label: 'Shoot photo (front)', options: {mediaType: 'photo', cameraType: 'front'}, capture: true},
+  {
+    label: 'Shoot photo (front)',
+    options: {mediaType: MediaType.photo, cameraType: CameraType.front},
+    capture: true,
+  },
   {
     label: 'Record video 10s',
-    options: {mediaType: 'video', durationLimit: 10},
+    options: {mediaType: MediaType.video, durationLimit: 10},
     capture: true,
   },
-  {label: 'Capture mixed (invalid)', options: {mediaType: 'mixed'}, capture: true},
+  {
+    label: 'Capture mixed (invalid)',
+    options: {mediaType: MediaType.mixed},
+    capture: true,
+  },
   {
     label: 'Photo +b64 +exif +extra',
     options: {
-      mediaType: 'photo',
+      mediaType: MediaType.photo,
       includeBase64: true,
       includeExif: true,
       includeExtra: true,
@@ -61,16 +81,24 @@ const CASES: Case[] = [
   },
   {
     label: 'Photo max400 q0.5',
-    options: {mediaType: 'photo', maxWidth: 400, maxHeight: 400, quality: 0.5},
+    options: {
+      mediaType: MediaType.photo,
+      maxWidth: 400,
+      maxHeight: 400,
+      quality: 0.5,
+    },
   },
-  {label: 'Photos ×3', options: {mediaType: 'photo', selectionLimit: 3}},
+  {
+    label: 'Photos ×3',
+    options: {mediaType: MediaType.photo, selectionLimit: 3},
+  },
   // minimumFileSizeForCompress defaults to 10 MB, so these would all skip on
   // anything a phone actually produces. Lowering it is what makes a budget an
   // unconditional ceiling, and these buttons exist to show the budgets working.
   {
     label: 'Photo ≤500KB',
     options: {
-      mediaType: 'photo',
+      mediaType: MediaType.photo,
       maxImageFileSize: 500 * 1024,
       minimumFileSizeForCompress: 0,
     },
@@ -78,7 +106,7 @@ const CASES: Case[] = [
   {
     label: 'Video ≤5MB',
     options: {
-      mediaType: 'video',
+      mediaType: MediaType.video,
       maxVideoFileSize: 5 * MB,
       minimumFileSizeForCompress: 0,
     },
@@ -86,7 +114,7 @@ const CASES: Case[] = [
   {
     label: 'Mixed ≤1MB/≤5MB',
     options: {
-      mediaType: 'mixed',
+      mediaType: MediaType.mixed,
       selectionLimit: 5,
       maxImageFileSize: 1 * MB,
       maxVideoFileSize: 5 * MB,
@@ -96,7 +124,7 @@ const CASES: Case[] = [
   {
     label: 'Shoot ≤300KB',
     options: {
-      mediaType: 'photo',
+      mediaType: MediaType.photo,
       maxImageFileSize: 300 * 1024,
       minimumFileSizeForCompress: 0,
     },
@@ -105,7 +133,7 @@ const CASES: Case[] = [
   {
     label: 'Crop then ≤200KB',
     options: {
-      mediaType: 'photo',
+      mediaType: MediaType.photo,
       cropping: true,
       cropWidth: 1000,
       cropHeight: 1000,
@@ -126,7 +154,7 @@ const CASES: Case[] = [
   // 10 MB comes back untouched with compressionSkipped: 'below_minimum'.
   {
     label: 'Photo ≤500KB (default floor)',
-    options: {mediaType: 'photo', maxImageFileSize: 500 * 1024},
+    options: {mediaType: MediaType.photo, maxImageFileSize: 500 * 1024},
   },
 ];
 
@@ -161,7 +189,9 @@ export default function App() {
   // so a failure here is a wiring failure rather than a picker failure.
   useEffect(() => {
     cleanTempFiles()
-      .then(() => setLog('module loaded\nnative round trip OK (cleanTempFiles resolved)'))
+      .then(() =>
+        setLog('module loaded\nnative round trip OK (cleanTempFiles resolved)'),
+      )
       .catch(e => setLog(`native round trip FAILED: ${String(e)}`));
   }, []);
 
@@ -231,10 +261,15 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#fff',
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight ?? 0 : 0,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0,
   },
   buttons: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, padding: 12},
-  button: {backgroundColor: '#424242', borderRadius: 6, paddingHorizontal: 12, paddingVertical: 10},
+  button: {
+    backgroundColor: '#424242',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
   capture: {backgroundColor: '#1b5e20'},
   buttonText: {color: '#fff', fontWeight: '600'},
   progress: {marginHorizontal: 12, fontWeight: '600', color: '#1b5e20'},

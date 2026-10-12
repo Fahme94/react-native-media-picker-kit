@@ -53,37 +53,84 @@ Needs React Native **0.79+** with the New Architecture on (`newArchEnabled=true`
 `minSdkVersion` 24+, iOS 15.1+. There is no legacy-architecture fallback, and Expo Go cannot load it —
 you need a development build. See [Expo](docs/expo.md).
 
-## Use it
+## Quick start
 
 ```ts
-import { pickMedia } from 'react-native-media-picker-kit';
+import { pickMedia, MediaType } from "react-native-media-picker-kit"
 
-const result = await pickMedia({ mediaType: 'photo' });
+const result = await pickMedia({
+  mediaType: MediaType.photo,
+})
 
-if (result.didCancel) return;                       // user backed out
-if (result.errorCode) return console.warn(result.errorMessage);
+if (result.didCancel) return
+if (result.errorCode) {
+  console.warn(result.errorMessage)
+  return
+}
 
-const [asset] = result.assets;
-console.log(asset.uri);                             // file:///…/photo.jpg
+const [asset] = result.assets
+console.log(asset.uri) // file:///.../photo.jpg
 ```
 
 That is the whole setup. No permission request, no `Info.plist` key, no manifest entry — the system
 picker runs out of process and hands back only what the user chose. Nothing ever throws: a cancel is
 a result, not an error.
 
+### Common usage patterns
+
+```ts
+import {
+  pickMedia,
+  captureMedia,
+  MediaType,
+  CameraType,
+  VideoQuality,
+} from "react-native-media-picker-kit"
+
+// Pick multiple photos
+const many = await pickMedia({
+  mediaType: MediaType.photo,
+  selectionLimit: 5,
+})
+
+// Pick a video
+const clip = await pickMedia({
+  mediaType: MediaType.video,
+})
+
+// Pick both photos and videos
+const mixed = await pickMedia({
+  mediaType: MediaType.mixed,
+  selectionLimit: 0, // 0 = unlimited
+})
+
+// Capture a photo from the back camera
+const photo = await captureMedia({
+  mediaType: MediaType.photo,
+  cameraType: CameraType.back,
+})
+
+// Record a short video
+const video = await captureMedia({
+  mediaType: MediaType.video,
+  durationLimit: 10,
+  videoQuality: VideoQuality.high,
+})
+```
+
 ### Send it to your backend
 
 Every asset is a real file with the three fields `FormData` wants:
 
 ```ts
-const body = new FormData();
-body.append('file', {
+const body = new FormData()
+body.append("file", {
   uri: asset.uri,
   name: asset.fileName,
   type: asset.type,
-} as any);
+} as any)
 
-await fetch('https://api.example.com/upload', { method: 'POST', body });
+await fetch("https://api.example.com/upload", { method: "POST", body })
 ```
 
 ## More ways to use it
@@ -91,25 +138,43 @@ await fetch('https://api.example.com/upload', { method: 'POST', body });
 ### Pick several, or video
 
 ```ts
-const many  = await pickMedia({ mediaType: 'photo', selectionLimit: 5 });
-const clips = await pickMedia({ mediaType: 'video' });
-const both  = await pickMedia({ mediaType: 'mixed', selectionLimit: 0 });  // 0 = unlimited
+const many = await pickMedia({
+  mediaType: MediaType.photo,
+  selectionLimit: 5,
+})
+const clips = await pickMedia({
+  mediaType: MediaType.video,
+})
+const both = await pickMedia({
+  mediaType: MediaType.mixed,
+  selectionLimit: 0,
+}) // 0 = unlimited
 ```
 
 Images can be resized and re-encoded on the way out, without a second library:
 
 ```ts
-await pickMedia({ maxWidth: 640, maxHeight: 640, quality: 0.8 });
+await pickMedia({ maxWidth: 640, maxHeight: 640, quality: 0.8 })
 ```
 
 ### Shoot with the camera
 
 ```ts
-import { captureMedia } from 'react-native-media-picker-kit';
+import {
+  captureMedia,
+  CameraType,
+  MediaType,
+} from "react-native-media-picker-kit"
 
-const photo = await captureMedia({ mediaType: 'photo', cameraType: 'back' });
+const photo = await captureMedia({
+  mediaType: MediaType.photo,
+  cameraType: CameraType.back,
+})
 
-const clip = await captureMedia({ mediaType: 'video', durationLimit: 10 });
+const clip = await captureMedia({
+  mediaType: MediaType.video,
+  durationLimit: 10,
+})
 ```
 
 Same options, same result shape, always at most one asset. Camera capture _does_ need one `Info.plist` key on iOS, and still needs nothing on Android — see [Permissions](docs/permissions.md).
@@ -120,12 +185,12 @@ One flag, and it works identically after a pick or a capture:
 
 ```ts
 const avatar = await pickMedia({
-  mediaType: 'photo',
+  mediaType: MediaType.photo,
   cropping: true,
   cropWidth: 1000,
   cropHeight: 1000,
   cropperCircleOverlay: true,
-});
+})
 ```
 
 Both dimensions given means the output is resized to exactly that. See [Cropping](docs/cropping.md).
@@ -136,10 +201,10 @@ Give it a byte budget and anything over 10 MB comes back fitting it:
 
 ```ts
 const result = await pickMedia({
-  mediaType: 'mixed',
-  maxImageFileSize: 2 * 1024 * 1024,   // 2 MB
-  maxVideoFileSize: 10 * 1024 * 1024,  // 10 MB
-});
+  mediaType: MediaType.mixed,
+  maxImageFileSize: 2 * 1024 * 1024, // 2 MB
+  maxVideoFileSize: 10 * 1024 * 1024, // 10 MB
+})
 ```
 
 Images are re-encoded, video is transcoded to H.264/AAC, and compression runs last — after any
@@ -153,8 +218,8 @@ lower it for images:
 ```ts
 await pickMedia({
   maxImageFileSize: 2 * 1024 * 1024,
-  minimumFileSizeForCompress: 0,   // compress whatever is over, however small
-});
+  minimumFileSizeForCompress: 0, // compress whatever is over, however small
+})
 ```
 
 A skipped file comes back over budget with `asset.compressionSkipped` set to `'below_minimum'` — and
@@ -165,36 +230,36 @@ A skipped file comes back over budget with `asset.compressionSkipped` set to `'b
 
 ## Features
 
-| Feature | Status |
-| --- | --- |
-| Gallery picking with **no runtime permission** — PHPicker on iOS, Photo Picker on Android | ✅ Available |
-| Camera capture and video recording, still **nothing to declare on Android** ([`captureMedia`](docs/api.md#capturemediaoptions)) | ✅ Available |
-| Cropping built in — one flag, after a pick *or* a shot ([details](docs/cropping.md)) | ✅ Available |
-| Photos, videos, or both in one pick (`mediaType: 'photo' \| 'video' \| 'mixed'`) | ✅ Available |
-| Resize and re-encode on the native side (`maxWidth` / `maxHeight` / `quality` / `forceJpg`) | ✅ Available |
+| Feature                                                                                                                          | Status       |
+| -------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Gallery picking with **no runtime permission** — PHPicker on iOS, Photo Picker on Android                                        | ✅ Available |
+| Camera capture and video recording, still **nothing to declare on Android** ([`captureMedia`](docs/api.md#capturemediaoptions))  | ✅ Available |
+| Cropping built in — one flag, after a pick _or_ a shot ([details](docs/cropping.md))                                             | ✅ Available |
+| Photos, videos, or both in one pick (`mediaType: 'photo' \| 'video' \| 'mixed'`)                                                 | ✅ Available |
+| Resize and re-encode on the native side (`maxWidth` / `maxHeight` / `quality` / `forceJpg`)                                      | ✅ Available |
 | Compress to a target file size — images **and video** (`maxImageFileSize` / `maxVideoFileSize`) ([details](docs/compression.md)) | ✅ Available |
-| Compression progress for video, and cancellation part-way (`cancelCompression`) | ✅ Available |
-| Skips files under 10 MB by default, so a short clip is never transcoded to save a little (`minimumFileSizeForCompress`) | ✅ Available |
-| Every asset is a real `file://` in app cache — never a raw `content://` URI | ✅ Available |
-| Read EXIF and asset metadata (`includeExif`, `includeExtra`) | ✅ Available |
-| Temp-file lifecycle API — `cleanTempFiles()` ([details](docs/temp-files.md)) | ✅ Available |
-| Expo config plugin, no manual `Info.plist` edits ([details](docs/expo.md)) | ✅ Available |
-| Fully typed — the API **never rejects**, cancel is a result not an error | ✅ Available |
-| `saveToPhotos` | ❌ Not yet |
+| Compression progress for video, and cancellation part-way (`cancelCompression`)                                                  | ✅ Available |
+| Skips files under 10 MB by default, so a short clip is never transcoded to save a little (`minimumFileSizeForCompress`)          | ✅ Available |
+| Every asset is a real `file://` in app cache — never a raw `content://` URI                                                      | ✅ Available |
+| Read EXIF and asset metadata (`includeExif`, `includeExtra`)                                                                     | ✅ Available |
+| Temp-file lifecycle API — `cleanTempFiles()` ([details](docs/temp-files.md))                                                     | ✅ Available |
+| Expo config plugin, no manual `Info.plist` edits ([details](docs/expo.md))                                                       | ✅ Available |
+| Fully typed — the API **never rejects**, cancel is a result not an error                                                         | ✅ Available |
+| `saveToPhotos`                                                                                                                   | ❌ Not yet   |
 
 ## Comparison
 
 The option and result shapes are a merge of the two libraries most people reach for, with the inconsistencies between them resolved.
 
-| | react-native-media-picker-kit | react-native-image-picker | react-native-image-crop-picker |
-| --- | --- | --- | --- |
-| Cropping | Built in — `cropping: true` on a pick or a capture | Not supported | Built in |
-| Cancelling | Resolves with `didCancel: true` | Resolves with `didCancel: true` | **Rejects** — every call site needs a `catch` that string-matches the cancel code |
-| Android gallery video | Real `file://` copied into app cache | Read-only `content://` URI, which breaks uploads and `fs` calls | Real file |
-| `duration` units | Milliseconds on both platforms | Seconds | Milliseconds |
-| Asset field names | One shape everywhere — `uri` / `fileName` / `fileSize` / `type` | `uri` / `fileName` / `fileSize` / `type` | `path` / `filename` / `size` / `mime` |
-| Extra Android setup | None | None | Add the JitPack repo to your root `build.gradle` for uCrop |
-| Architecture | New Architecture only (TurboModule) | Both, with a legacy fallback | Both |
+|                       | react-native-media-picker-kit                                   | react-native-image-picker                                       | react-native-image-crop-picker                                                    |
+| --------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Cropping              | Built in — `cropping: true` on a pick or a capture              | Not supported                                                   | Built in                                                                          |
+| Cancelling            | Resolves with `didCancel: true`                                 | Resolves with `didCancel: true`                                 | **Rejects** — every call site needs a `catch` that string-matches the cancel code |
+| Android gallery video | Real `file://` copied into app cache                            | Read-only `content://` URI, which breaks uploads and `fs` calls | Real file                                                                         |
+| `duration` units      | Milliseconds on both platforms                                  | Seconds                                                         | Milliseconds                                                                      |
+| Asset field names     | One shape everywhere — `uri` / `fileName` / `fileSize` / `type` | `uri` / `fileName` / `fileSize` / `type`                        | `path` / `filename` / `size` / `mime`                                             |
+| Extra Android setup   | None                                                            | None                                                            | Add the JitPack repo to your root `build.gradle` for uCrop                        |
+| Architecture          | New Architecture only (TurboModule)                             | Both, with a legacy fallback                                    | Both                                                                              |
 
 Reflects the behaviour these libraries document and that this package was built to reconcile — verify against their current releases before relying on a row.
 
@@ -202,15 +267,14 @@ Reflects the behaviour these libraries document and that this package was built 
 
 ## Documentation
 
--  [**API reference**](docs/api.md) — every option, the `Asset` shape, error codes, and all five exports.
--  [Cropping](docs/cropping.md) — sizing, free-form vs aspect-locked, and what the cropper can't do.
--  [Compression](docs/compression.md) — target file sizes for images and video, and what it costs.
--  [Permissions](docs/permissions.md) — why the gallery needs none, and the one camera key that isn't optional.
--  [Expo](docs/expo.md) — the bundled config plugin and development builds.
--  [Temp files](docs/temp-files.md) — where assets live and how to clean them up.
--  [Troubleshooting](docs/troubleshooting.md) — autolinking, older Android, and the Xcode `fmt` build failure.
--  [Example app](example) — a runnable project with a button per option.
-
+- [**API reference**](docs/api.md) — every option, the `Asset` shape, error codes, and all five exports.
+- [Cropping](docs/cropping.md) — sizing, free-form vs aspect-locked, and what the cropper can't do.
+- [Compression](docs/compression.md) — target file sizes for images and video, and what it costs.
+- [Permissions](docs/permissions.md) — why the gallery needs none, and the one camera key that isn't optional.
+- [Expo](docs/expo.md) — the bundled config plugin and development builds.
+- [Temp files](docs/temp-files.md) — where assets live and how to clean them up.
+- [Troubleshooting](docs/troubleshooting.md) — autolinking, older Android, and the Xcode `fmt` build failure.
+- [Example app](example) — a runnable project with a button per option.
 
 - [Report a bug](https://github.com/Fahme94/react-native-media-picker/issues)
 
