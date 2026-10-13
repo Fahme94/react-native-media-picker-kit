@@ -27,6 +27,28 @@ gallery or the camera.
 auto-linking, so every framework the implementation touches has to be listed in `s.frameworks` or the app
 fails at link time with undefined PHPicker/AVFoundation symbols.
 
+## Checks
+
+From the repository root:
+
+```bash
+yarn lint        # ESLint and Prettier, warnings fail
+yarn format      # rewrite src/ and plugin/ with Prettier
+yarn typecheck
+yarn test        # JS unit tests for src/index.ts, native module mocked
+```
+
+CI (`.github/workflows/ci.yml`) runs these on every push to `main` and every pull request, then builds the
+example app and runs the Android instrumented tests on an emulator and the iOS `MediaPickerCaptureTests` on a
+simulator. The iOS UI tests below need Metro and a photo library, so they are run locally before a release.
+
+Android instrumented tests, with an emulator booted:
+
+```bash
+cd example/android
+./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest
+```
+
 ## Running the example
 
 `example/` is a React Native CLI app that links the package and builds on both platforms.

@@ -116,10 +116,7 @@ function validate(o: PickerOptions): string | null {
   if (o.maxVideoFileSize !== undefined && o.maxVideoFileSize < 0) {
     return 'maxVideoFileSize must be 0 or greater';
   }
-  if (
-    o.minimumFileSizeForCompress !== undefined &&
-    o.minimumFileSizeForCompress < 0
-  ) {
+  if (o.minimumFileSizeForCompress !== undefined && o.minimumFileSizeForCompress < 0) {
     return 'minimumFileSizeForCompress must be 0 or greater';
   }
   if (o.cropping) {
@@ -164,7 +161,7 @@ function validateCapture(o: PickerOptions): string | null {
   }
   // The camera returns exactly one asset, so selectionLimit is forced below and
   // the shared rules are checked against that value rather than the caller's.
-  return validate({...o, selectionLimit: 1});
+  return validate({ ...o, selectionLimit: 1 });
 }
 
 /**
@@ -193,9 +190,7 @@ export async function captureMedia(options: PickerOptions = {}): Promise<PickerR
   if (invalid) return fail(invalid, 'invalid_options');
 
   try {
-    const raw = await NativeMediaPicker.captureMedia(
-      normalize({...options, selectionLimit: 1})
-    );
+    const raw = await NativeMediaPicker.captureMedia(normalize({ ...options, selectionLimit: 1 }));
     return toResult(raw);
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
@@ -232,10 +227,7 @@ export async function compressMedia(
 ): Promise<PickerResult> {
   if (!path) return fail('path is required', 'invalid_options');
   if (!options.maxImageFileSize && !options.maxVideoFileSize) {
-    return fail(
-      'maxImageFileSize or maxVideoFileSize is required',
-      'invalid_options'
-    );
+    return fail('maxImageFileSize or maxVideoFileSize is required', 'invalid_options');
   }
   const invalid = validate(options);
   if (invalid) return fail(invalid, 'invalid_options');
@@ -268,9 +260,9 @@ export async function compressMedia(
  * }, []);
  * ```
  */
-export function addCompressProgressListener(
-  listener: (event: CompressProgress) => void
-): { remove(): void } {
+export function addCompressProgressListener(listener: (event: CompressProgress) => void): {
+  remove(): void;
+} {
   return NativeMediaPicker.onCompressProgress(listener);
 }
 

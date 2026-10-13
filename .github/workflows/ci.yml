@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn lint
+      - run: yarn typecheck
+      - run: yarn test --coverage
+      - run: yarn prepare
+
+  android:
+    name: Android build and instrumented tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: |
+            yarn.lock
+            example/yarn.lock
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: yarn install --frozen-lockfile
+      - run: yarn install --frozen-lockfile
+        working-directory: example
+      - name: Build the example app
+        run: ./gradlew :app:assembleDebug
+        working-directory: example/android
+      # The emulator needs hardware acceleration, which Linux runners only
+      # expose once the runner user can open /dev/kvm.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run instrumented tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          working-directory: example/android
+          script: ./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-report
+          path: android/build/reports/androidTests
+
+  ios:
+    name: iOS build and capture tests
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: |
+            yarn.lock
+            example/yarn.lock
+      - run: yarn install --frozen-lockfile
+      - run: yarn install --frozen-lockfile
+        working-directory: example
+      - uses: actions/cache@v4
+        with:
+          path: example/ios/Pods
+          key: pods-${{ runner.os }}-${{ hashFiles('example/ios/Podfile.lock') }}
+      - run: pod install
+        working-directory: example/ios
+      # Only the capture tests: they drive the native delegates with media they
+      # generate themselves. The picker UI tests need Metro and a photo library,
+      # so they stay a local, pre-release run for now.
+      - name: Run capture tests
+        run: |
+          xcodebuild test \
+            -workspace MediaPickerExample.xcworkspace \
+            -scheme MediaPickerExample \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -only-testing:MediaPickerCaptureTests \
+            CODE_SIGNING_ALLOWED=NO
+        working-directory: example/ios

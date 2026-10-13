@@ -1,4 +1,4 @@
-const {withInfoPlist} = require('expo/config-plugins');
+const { withInfoPlist } = require('expo/config-plugins');
 
 /**
  * iOS terminates an app that opens the camera without NSCameraUsageDescription,
@@ -17,7 +17,7 @@ const DEFAULTS = {
  * not use the corresponding feature and do not want the App Store prompt.
  */
 const withMediaPicker = (config, props = {}) =>
-  withInfoPlist(config, cfg => {
+  withInfoPlist(config, (cfg) => {
     const apply = (key, option, fallback) => {
       const value = props[option];
       if (value === false) {
@@ -29,7 +29,11 @@ const withMediaPicker = (config, props = {}) =>
 
     apply('NSCameraUsageDescription', 'cameraPermission', DEFAULTS.cameraPermission);
     apply('NSMicrophoneUsageDescription', 'microphonePermission', DEFAULTS.microphonePermission);
-    apply('NSPhotoLibraryUsageDescription', 'photoLibraryPermission', DEFAULTS.photoLibraryPermission);
+    apply(
+      'NSPhotoLibraryUsageDescription',
+      'photoLibraryPermission',
+      DEFAULTS.photoLibraryPermission
+    );
 
     return cfg;
   });

@@ -5,26 +5,12 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.CancellationSignal
-import android.os.ext.SdkExtensions
-import android.provider.OpenableColumns
-import android.provider.MediaStore
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
-import com.canhub.cropper.CropImageContract
-import com.canhub.cropper.CropImageContractOptions
-import com.canhub.cropper.CropImageOptions
-import com.canhub.cropper.CropImageView
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableMap
-import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.PermissionAwareActivity
@@ -32,6 +18,12 @@ import com.facebook.react.modules.core.PermissionListener
 import java.io.File
 import java.util.concurrent.Executors
 
+/**
+ * The JS surface. Owns the one call that can be in flight at a time and walks it
+ * through gallery, camera and cropper; what each of those screens does lives in
+ * [GalleryPicker], [CameraCapture] and [Cropper], and the file work in
+ * [ImageProcessing] and [VideoProcessing].
+ */
 @ReactModule(name = MediaPickerModule.NAME)
 class MediaPickerModule(private val reactContext: ReactApplicationContext) :
   NativeMediaPickerSpec(reactContext) {
@@ -42,28 +34,17 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     private const val RC_CROP = 51002
     private const val RC_CAPTURE = 51003
     private const val RC_CAMERA_PERMISSION = 51004
-    // PickMultipleVisualMedia rejects unbounded requests, so "unlimited" is capped.
-    private const val UNLIMITED_CAP = 100
-    // MediaStore.EXTRA_PICKER_PRE_SELECTION_URIS, spelled out so compileSdk can
-    // stay below 36. It reached the photo picker in SDK extension R-15, which
-    // Play system updates bring to Android 11+, not only to Android 16.
-    private const val EXTRA_PRE_SELECTION_URIS = "android.provider.extra.PICKER_PRE_SELECTION_URIS"
-    private const val PRE_SELECTION_EXTENSION_VERSION = 15
   }
 
-  /**
-   * How a pick was opened. [shown] is the part of `preselected` the picker was
-   * told to tick, and the only part that can be reported as deselected. [limit]
-   * is the selectionLimit handed to the picker, already lowered by the
-   * preselected items it could not show.
-   */
-  private class PickPlan(val limit: Int, val shown: List<String>)
+  private val gallery = GalleryPicker(reactContext)
+  private val camera = CameraCapture(reactContext)
+  private val cropper = Cropper(reactContext)
 
   private val worker = Executors.newSingleThreadExecutor()
 
   private var pendingPromise: Promise? = null
   private var pendingOptions: ReadableMap? = null
-  private var pendingPick: PickPlan? = null
+  private var pendingPick: GalleryPicker.Plan? = null
   private var pendingOriginalUri: String? = null
   private var pendingCaptureFile: File? = null
   private var pendingCaptureIsVideo = false
@@ -103,43 +84,39 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
 
   override fun pickMedia(options: ReadableMap, promise: Promise) {
     val activity = currentActivity
-      ?: return promise.resolve(errorResult("others", "No foreground activity"))
+      ?: return promise.resolve(Results.error("others", "No foreground activity"))
     if (pendingPromise != null) {
-      return promise.resolve(errorResult("picker_busy", "A picker is already open"))
+      return promise.resolve(Results.error("picker_busy", "A picker is already open"))
     }
 
-    val plan = planPick(activity, options)
-    if (plan.limit <= 0 && intOr(options, "selectionLimit", 1) > 0) {
+    val plan = gallery.plan(activity, options)
+    if (plan.limit <= 0 && options.intOr("selectionLimit", 1) > 0) {
       // Every slot is taken by preselected items the picker cannot show, so
       // there is nothing the user could add or untick.
-      return promise.resolve(successResult(Arguments.createArray()))
+      return promise.resolve(Results.success(Arguments.createArray()))
     }
 
     pendingPromise = promise
     pendingOptions = options
     pendingPick = plan
     try {
-      activity.startActivityForResult(buildPickIntent(activity, options, plan), RC_PICK)
+      activity.startActivityForResult(gallery.intent(activity, options, plan), RC_PICK)
     } catch (e: Exception) {
-      finish(errorResult("others", e.message ?: "Could not open the picker"))
+      finish(Results.error("others", e.message ?: "Could not open the picker"))
     }
   }
 
   override fun captureMedia(options: ReadableMap, promise: Promise) {
     val activity = currentActivity
-      ?: return promise.resolve(errorResult("others", "No foreground activity"))
+      ?: return promise.resolve(Results.error("others", "No foreground activity"))
     if (pendingPromise != null) {
-      return promise.resolve(errorResult("picker_busy", "A picker is already open"))
+      return promise.resolve(Results.error("picker_busy", "A picker is already open"))
     }
 
     pendingPromise = promise
     pendingOptions = options
 
-    // The capture intents need no permission of their own. Android does refuse
-    // them when the *app* declares CAMERA and the user has not granted it, and
-    // apps inherit that declaration from other libraries, so check for it rather
-    // than assume this library's empty permission list is the whole story.
-    if (cameraPermissionMissing(activity)) {
+    if (camera.permissionMissing(activity)) {
       requestCameraPermission(activity)
     } else {
       launchCapture(activity)
@@ -148,13 +125,13 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
 
   override fun cropImage(options: ReadableMap, promise: Promise) {
     val activity = currentActivity
-      ?: return promise.resolve(errorResult("others", "No foreground activity"))
+      ?: return promise.resolve(Results.error("others", "No foreground activity"))
     if (pendingPromise != null) {
-      return promise.resolve(errorResult("picker_busy", "A picker is already open"))
+      return promise.resolve(Results.error("picker_busy", "A picker is already open"))
     }
     val path = options.getString("path")
     if (path.isNullOrBlank()) {
-      return promise.resolve(errorResult("invalid_options", "path is required"))
+      return promise.resolve(Results.error("invalid_options", "path is required"))
     }
 
     pendingPromise = promise
@@ -166,7 +143,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
   override fun compressMedia(options: ReadableMap, promise: Promise) {
     val path = options.getString("path")
     if (path.isNullOrBlank()) {
-      return promise.resolve(errorResult("invalid_options", "path is required"))
+      return promise.resolve(Results.error("invalid_options", "path is required"))
     }
 
     // No UI, so this neither claims the picker slot nor minds that one is open.
@@ -175,13 +152,13 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
         val file = File(path.removePrefix("file://"))
         if (!file.exists()) {
           return@execute promise.resolve(
-            errorResult("cannot_process_asset", "There is no file at $path")
+            Results.error("cannot_process_asset", "There is no file at $path")
           )
         }
-        val mime = MediaUtils.mimeForPath(file.name)
+        val mime = MediaFiles.mimeForPath(file.name)
         if (!mime.startsWith("image/") && !mime.startsWith("video/")) {
           return@execute promise.resolve(
-            errorResult("invalid_options", "$path is neither an image nor a video")
+            Results.error("invalid_options", "$path is neither an image nor a video")
           )
         }
 
@@ -189,16 +166,16 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
           withCancellation { compressToBudget(Processed(file, mime, file.name), options) }
         } catch (e: Exception) {
           return@execute promise.resolve(
-            errorResult("compress_failed", e.message ?: "Could not compress the media")
+            Results.error("compress_failed", e.message ?: "Could not compress the media")
           )
         }
 
         val assets = Arguments.createArray()
-        assets.pushMap(buildAsset(processed, path, options, null))
-        promise.resolve(successResult(assets))
+        assets.pushMap(Results.asset(processed, path, options, null))
+        promise.resolve(Results.success(assets))
       } catch (e: Exception) {
         promise.resolve(
-          errorResult("cannot_process_asset", e.message ?: "Could not read the file")
+          Results.error("cannot_process_asset", e.message ?: "Could not read the file")
         )
       }
     }
@@ -208,6 +185,189 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     // Safe from any thread, and safe when nothing is running.
     compressionCancel?.cancel()
     promise.resolve(null)
+  }
+
+  override fun cleanTempFiles(path: String, promise: Promise) {
+    worker.execute {
+      try {
+        MediaFiles.deleteTemp(reactContext, path)
+        promise.resolve(null)
+      } catch (e: Exception) {
+        promise.reject("clean_failed", e.message, e)
+      }
+    }
+  }
+
+  // --- picking ------------------------------------------------------------
+
+  private fun handlePickResult(resultCode: Int, data: Intent?) {
+    if (resultCode != Activity.RESULT_OK || data == null) {
+      return finish(Results.cancelled())
+    }
+
+    val options = pendingOptions ?: return finish(Results.error("others", "Lost picker options"))
+    val plan = pendingPick ?: GalleryPicker.Plan(options.intOr("selectionLimit", 1), emptyList())
+    val selection = gallery.selection(data, options, plan) ?: return finish(Results.cancelled())
+
+    if (selection.fresh.isEmpty()) {
+      return finish(Results.success(Arguments.createArray(), selection.deselected))
+    }
+
+    worker.execute {
+      try {
+        val files = selection.fresh.map { uri -> gallery.copyIn(uri, options) }
+        deliver(files, selection.fresh.map { it.toString() }, options, selection.deselected)
+      } catch (e: Exception) {
+        finish(Results.error("cannot_process_asset", e.message ?: "Could not read the selected media"))
+      }
+    }
+  }
+
+  // --- capture ------------------------------------------------------------
+
+  private fun requestCameraPermission(activity: Activity) {
+    val permissionAware = activity as? PermissionAwareActivity
+      ?: return finish(Results.error("permission", "Activity cannot request permissions"))
+
+    permissionAware.requestPermissions(
+      arrayOf(Manifest.permission.CAMERA),
+      RC_CAMERA_PERMISSION,
+      PermissionListener { requestCode, _, grantResults ->
+        if (requestCode == RC_CAMERA_PERMISSION) {
+          val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+          if (!granted) {
+            finish(Results.error("permission", "Camera permission was denied"))
+          } else {
+            val current = currentActivity
+            if (current == null) {
+              finish(Results.error("others", "No foreground activity"))
+            } else {
+              launchCapture(current)
+            }
+          }
+        }
+        true
+      }
+    )
+  }
+
+  private fun launchCapture(activity: Activity) {
+    val options = pendingOptions ?: return finish(Results.error("others", "Lost picker options"))
+    val isVideo = options.getString("mediaType") == "video"
+    val output = MediaFiles.newCacheFile(reactContext, if (isVideo) "mp4" else "jpg")
+
+    pendingCaptureFile = output
+    pendingCaptureIsVideo = isVideo
+
+    try {
+      // No <queries> entry is needed: package visibility filters resolveActivity,
+      // not the ability to start an implicit intent.
+      activity.startActivityForResult(camera.intent(options, isVideo, output), RC_CAPTURE)
+    } catch (e: ActivityNotFoundException) {
+      finish(Results.error("camera_unavailable", "No camera app is available"))
+    } catch (e: Exception) {
+      finish(Results.error("others", e.message ?: "Could not open the camera"))
+    }
+  }
+
+  private fun handleCaptureResult(resultCode: Int, data: Intent?) {
+    val output = pendingCaptureFile
+    val isVideo = pendingCaptureIsVideo
+
+    if (resultCode != Activity.RESULT_OK) {
+      output?.delete()
+      return finish(Results.cancelled())
+    }
+
+    val options = pendingOptions ?: return finish(Results.error("others", "Lost picker options"))
+
+    worker.execute {
+      try {
+        val processed = camera.result(output, isVideo, data, options)
+          ?: return@execute finish(Results.cancelled())
+        deliver(listOf(processed), listOf(null), options)
+      } catch (e: Exception) {
+        finish(Results.error("cannot_process_asset", e.message ?: "Could not read the capture"))
+      }
+    }
+  }
+
+  // --- cropping -----------------------------------------------------------
+
+  private fun startCrop(activity: Activity, source: Uri, options: ReadableMap) {
+    try {
+      activity.startActivityForResult(cropper.intent(activity, source, options), RC_CROP)
+    } catch (e: Exception) {
+      finish(Results.error("crop_failed", e.message ?: "Could not open the cropper"))
+    }
+  }
+
+  private fun handleCropResult(resultCode: Int, data: Intent?) {
+    if (resultCode != Activity.RESULT_OK || data == null) {
+      return finish(Results.cancelled())
+    }
+
+    val options = pendingOptions ?: return finish(Results.error("others", "Lost picker options"))
+    worker.execute {
+      try {
+        val cropped = cropper.result(resultCode, data)
+        val processed = try {
+          withCancellation {
+            compressToBudget(Processed(cropped.file, "image/jpeg", cropped.file.name), options)
+          }
+        } catch (e: Exception) {
+          return@execute finish(
+            Results.error("compress_failed", e.message ?: "Could not compress the image")
+          )
+        }
+        val assets = Arguments.createArray()
+        assets.pushMap(Results.asset(processed, pendingOriginalUri, options, cropped.cropRect))
+        finish(Results.success(assets))
+      } catch (e: Exception) {
+        finish(Results.error("crop_failed", e.message ?: "Cropping failed"))
+      }
+    }
+  }
+
+  // --- delivering ---------------------------------------------------------
+
+  /**
+   * Single exit for both picking and capturing: hand a single still image to the
+   * cropper when cropping was asked for, otherwise resolve with the assets. Runs
+   * on the worker thread; the cropper is dispatched back to the UI thread.
+   */
+  private fun deliver(
+    files: List<Processed>,
+    originalUris: List<String?>,
+    options: ReadableMap,
+    deselected: List<String> = emptyList()
+  ) {
+    if (options.flag("cropping") && files.size == 1 && !MediaFiles.isVideo(files[0].mime)) {
+      val activity = currentActivity
+        ?: return finish(Results.error("others", "No foreground activity"))
+      pendingOriginalUri = originalUris.firstOrNull()
+      activity.runOnUiThread {
+        startCrop(activity, Uri.fromFile(files[0].file), options)
+      }
+      return
+    }
+
+    val compressed = try {
+      withCancellation {
+        files.mapIndexed { index, processed ->
+          compressToBudget(processed, options, index, files.size)
+        }
+      }
+    } catch (e: Exception) {
+      return finish(Results.error("compress_failed", e.message ?: "Could not compress the media"))
+    }
+
+    val assets = Arguments.createArray()
+    compressed.forEachIndexed { index, processed ->
+      assets.pushMap(Results.asset(processed, originalUris.getOrNull(index), options, null))
+    }
+    finish(Results.success(assets, deselected))
   }
 
   /**
@@ -223,172 +383,6 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  override fun cleanTempFiles(path: String, promise: Promise) {
-    worker.execute {
-      try {
-        MediaUtils.deleteTemp(reactContext, path)
-        promise.resolve(null)
-      } catch (e: Exception) {
-        promise.reject("clean_failed", e.message, e)
-      }
-    }
-  }
-
-  // --- picking ------------------------------------------------------------
-
-  private fun planPick(activity: Activity, options: ReadableMap): PickPlan {
-    val requested = intOr(options, "selectionLimit", 1)
-    val preselected = readStringArray(options, "preselected")
-    fun lowered(hidden: Int) = if (requested <= 0) requested else requested - hidden
-
-    if (preselected.isNotEmpty() && supportsPreSelection(activity)) {
-      // An item whose read grant is gone cannot be ticked, so it must not be
-      // reported as unticked either; it just keeps its slot.
-      val shown = preselected.filter { isReadable(Uri.parse(it)) }
-      val limit = lowered(preselected.size - shown.size)
-      // Pre-selection is multi-select only.
-      if (limit != 1) return PickPlan(limit, shown)
-    }
-    return PickPlan(lowered(preselected.size), emptyList())
-  }
-
-  private fun supportsPreSelection(activity: Activity): Boolean =
-    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-      SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= PRE_SELECTION_EXTENSION_VERSION &&
-      ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(activity)
-
-  private fun isReadable(uri: Uri): Boolean = try {
-    reactContext.contentResolver
-      .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-      ?.use { it.moveToFirst() } ?: false
-  } catch (_: Exception) {
-    false
-  }
-
-  private fun buildPickIntent(activity: Activity, options: ReadableMap, plan: PickPlan): Intent {
-    val mediaType = options.getString("mediaType") ?: "photo"
-    val limit = plan.limit
-
-    val visualType = when (mediaType) {
-      "photo" -> ActivityResultContracts.PickVisualMedia.ImageOnly
-      "video" -> ActivityResultContracts.PickVisualMedia.VideoOnly
-      else -> ActivityResultContracts.PickVisualMedia.ImageAndVideo
-    }
-
-    if (ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(activity)) {
-      val request = PickVisualMediaRequest.Builder().setMediaType(visualType).build()
-      return if (limit == 1) {
-        ActivityResultContracts.PickVisualMedia().createIntent(activity, request)
-      } else {
-        val max = if (limit <= 0) UNLIMITED_CAP else limit
-        ActivityResultContracts.PickMultipleVisualMedia(max).createIntent(activity, request).apply {
-          if (plan.shown.isNotEmpty()) {
-            putParcelableArrayListExtra(
-              EXTRA_PRE_SELECTION_URIS,
-              ArrayList(plan.shown.map { Uri.parse(it) })
-            )
-          }
-        }
-      }
-    }
-
-    // Pre-photo-picker devices: Storage Access Framework. Still no permission needed.
-    val mimes = readStringArray(options, "restrictMimeTypes").ifEmpty {
-      when (mediaType) {
-        "photo" -> listOf("image/*")
-        "video" -> listOf("video/*")
-        else -> listOf("image/*", "video/*")
-      }
-    }
-    return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-      addCategory(Intent.CATEGORY_OPENABLE)
-      type = if (mimes.size == 1) mimes[0] else "*/*"
-      if (mimes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimes.toTypedArray())
-      putExtra(Intent.EXTRA_ALLOW_MULTIPLE, limit != 1)
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-  }
-
-  private fun handlePickResult(resultCode: Int, data: Intent?) {
-    if (resultCode != Activity.RESULT_OK || data == null) {
-      return finish(cancelledResult())
-    }
-
-    val uris = mutableListOf<Uri>()
-    data.clipData?.let { clip ->
-      for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
-    } ?: data.data?.let { uris.add(it) }
-
-    val options = pendingOptions ?: return finish(errorResult("others", "Lost picker options"))
-    val plan = pendingPick ?: PickPlan(intOr(options, "selectionLimit", 1), emptyList())
-
-    // With nothing shown ticked, an empty result can only be a cancel. When
-    // items were shown, it means the user unticked all of them.
-    if (uris.isEmpty() && plan.shown.isEmpty()) return finish(cancelledResult())
-
-    // The picker hands back preselected items alongside new ones, and where it
-    // could not show them a re-pick is a duplicate; the caller holds both.
-    val preselected = readStringArray(options, "preselected").toSet()
-    val picked = uris.map { it.toString() }.toSet()
-    val deselected = plan.shown.filterNot { it in picked }
-    val fresh = uris.filterNot { it.toString() in preselected }
-      // The document picker fallback has no limit of its own.
-      .let { if (plan.limit > 0) it.take(plan.limit) else it }
-
-    if (fresh.isEmpty()) {
-      return finish(successResult(Arguments.createArray(), deselected))
-    }
-
-    worker.execute {
-      try {
-        val files = fresh.map { uri -> copyAndProcess(uri, options) }
-        deliver(files, fresh.map { it.toString() }, options, deselected)
-      } catch (e: Exception) {
-        finish(errorResult("cannot_process_asset", e.message ?: "Could not read the selected media"))
-      }
-    }
-  }
-
-  /**
-   * Single exit for both picking and capturing: hand a single still image to the
-   * cropper when cropping was asked for, otherwise resolve with the assets. Runs
-   * on the worker thread; the cropper is dispatched back to the UI thread.
-   */
-  private fun deliver(
-    files: List<Processed>,
-    originalUris: List<String?>,
-    options: ReadableMap,
-    deselected: List<String> = emptyList()
-  ) {
-    val wantsCrop = options.hasKey("cropping") && options.getBoolean("cropping")
-
-    if (wantsCrop && files.size == 1 && !MediaUtils.isVideo(files[0].mime)) {
-      val activity = currentActivity
-        ?: return finish(errorResult("others", "No foreground activity"))
-      pendingOriginalUri = originalUris.firstOrNull()
-      activity.runOnUiThread {
-        startCrop(activity, Uri.fromFile(files[0].file), options)
-      }
-      return
-    }
-
-    val compressed = try {
-      withCancellation {
-        files.mapIndexed { index, processed ->
-          compressToBudget(processed, options, index, files.size)
-        }
-      }
-    } catch (e: Exception) {
-      return finish(errorResult("compress_failed", e.message ?: "Could not compress the media"))
-    }
-
-    val assets = Arguments.createArray()
-    compressed.forEachIndexed { index, processed ->
-      assets.pushMap(buildAsset(processed, originalUris.getOrNull(index), options, null))
-    }
-    finish(successResult(assets, deselected))
-  }
-
   /**
    * The last thing that happens to an asset before it is reported: shrink it
    * under the caller's byte budget. Deliberately after processImage() and after
@@ -400,15 +394,15 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     index: Int = 0,
     total: Int = 1
   ): Processed {
-    val isVideo = MediaUtils.isVideo(processed.mime)
-    val minBytes = longOr(options, "minimumFileSizeForCompress")
+    val isVideo = MediaFiles.isVideo(processed.mime)
+    val minBytes = options.longOr("minimumFileSizeForCompress")
     val cancel = compressionCancel
-    val budget = longOr(options, if (isVideo) "maxVideoFileSize" else "maxImageFileSize")
+    val budget = options.longOr(if (isVideo) "maxVideoFileSize" else "maxImageFileSize")
     val sizeBefore = processed.file.length()
 
     val file = if (isVideo) {
       var lastReported = -1.0
-      MediaUtils.compressVideo(
+      VideoProcessing.compressVideo(
         reactContext, processed.file, budget, minBytes, cancel
       ) { progress ->
         // The transcoder reports far more often than a UI can use, and every
@@ -419,7 +413,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
         }
       }
     } else {
-      MediaUtils.compressImage(
+      ImageProcessing.compressImage(
         reactContext, processed.file, processed.mime, budget, minBytes
       )
     }
@@ -443,343 +437,8 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     return Processed(
       file,
       if (isVideo) "video/mp4" else "image/jpeg",
-      MediaUtils.withExtension(processed.displayName, file.extension)
+      MediaFiles.withExtension(processed.displayName, file.extension)
     )
-  }
-
-  private data class Processed(
-    val file: File,
-    val mime: String,
-    val displayName: String,
-    /** Why this file is still over its budget, when it is. */
-    val compressionSkipped: String? = null
-  )
-
-  private fun copyAndProcess(uri: Uri, options: ReadableMap): Processed {
-    val mime = MediaUtils.mimeType(reactContext, uri)
-    val forceJpg = !options.hasKey("forceJpg") || options.getBoolean("forceJpg")
-    val extension = MediaUtils.extensionFor(mime, forceJpg)
-    val name = MediaUtils.displayName(reactContext, uri, "media.$extension")
-
-    var file = MediaUtils.copyToCache(reactContext, uri, extension)
-
-    if (!MediaUtils.isVideo(mime)) {
-      file = MediaUtils.processImage(
-        context = reactContext,
-        source = file,
-        mime = mime,
-        maxWidth = intOr(options, "maxWidth", 0),
-        maxHeight = intOr(options, "maxHeight", 0),
-        quality = doubleOr(options, "quality", 1.0),
-        forceJpg = forceJpg
-      )
-    }
-
-    val finalMime = if (!MediaUtils.isVideo(mime) && forceJpg && mime != "image/gif") "image/jpeg" else mime
-    // The gallery's display name still carries the source extension, so a
-    // re-encoded PNG would be reported as "shot.png" while both the file on
-    // disk and `type` say JPEG. Report the extension the bytes actually have.
-    return Processed(file, finalMime, MediaUtils.withExtension(name, file.extension))
-  }
-
-  // --- capture ------------------------------------------------------------
-
-  private fun cameraPermissionMissing(activity: Activity): Boolean {
-    val declared = try {
-      val info = activity.packageManager
-        .getPackageInfo(activity.packageName, PackageManager.GET_PERMISSIONS)
-      info.requestedPermissions?.contains(Manifest.permission.CAMERA) == true
-    } catch (_: Exception) {
-      false
-    }
-    if (!declared) return false
-    return ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) !=
-      PackageManager.PERMISSION_GRANTED
-  }
-
-  private fun requestCameraPermission(activity: Activity) {
-    val permissionAware = activity as? PermissionAwareActivity
-      ?: return finish(errorResult("permission", "Activity cannot request permissions"))
-
-    permissionAware.requestPermissions(
-      arrayOf(Manifest.permission.CAMERA),
-      RC_CAMERA_PERMISSION,
-      PermissionListener { requestCode, _, grantResults ->
-        if (requestCode == RC_CAMERA_PERMISSION) {
-          val granted = grantResults.isNotEmpty() &&
-            grantResults[0] == PackageManager.PERMISSION_GRANTED
-          if (!granted) {
-            finish(errorResult("permission", "Camera permission was denied"))
-          } else {
-            val current = currentActivity
-            if (current == null) {
-              finish(errorResult("others", "No foreground activity"))
-            } else {
-              launchCapture(current)
-            }
-          }
-        }
-        true
-      }
-    )
-  }
-
-  private fun launchCapture(activity: Activity) {
-    val options = pendingOptions ?: return finish(errorResult("others", "Lost picker options"))
-    val isVideo = options.getString("mediaType") == "video"
-    val output = MediaUtils.newCacheFile(reactContext, if (isVideo) "mp4" else "jpg")
-
-    pendingCaptureFile = output
-    pendingCaptureIsVideo = isVideo
-
-    val intent = Intent(
-      if (isVideo) MediaStore.ACTION_VIDEO_CAPTURE else MediaStore.ACTION_IMAGE_CAPTURE
-    ).apply {
-      putExtra(
-        MediaStore.EXTRA_OUTPUT,
-        FileProvider.getUriForFile(reactContext, fileProviderAuthority(), output)
-      )
-      addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
-      if (isVideo) {
-        val limit = intOr(options, "durationLimit", 0)
-        if (limit > 0) putExtra(MediaStore.EXTRA_DURATION_LIMIT, limit)
-        putExtra(
-          MediaStore.EXTRA_VIDEO_QUALITY,
-          if (options.getString("videoQuality") == "low") 0 else 1
-        )
-      }
-      if (options.getString("cameraType") == "front") {
-        // There is no standard extra for lens selection; these are the hints the
-        // common camera apps read, and any of them may be ignored.
-        putExtra("android.intent.extras.CAMERA_FACING", 1)
-        putExtra("android.intent.extras.LENS_FACING_FRONT", 1)
-        putExtra("android.intent.extra.USE_FRONT_CAMERA", true)
-      }
-    }
-
-    try {
-      // No <queries> entry is needed: package visibility filters resolveActivity,
-      // not the ability to start an implicit intent.
-      activity.startActivityForResult(intent, RC_CAPTURE)
-    } catch (e: ActivityNotFoundException) {
-      finish(errorResult("camera_unavailable", "No camera app is available"))
-    } catch (e: Exception) {
-      finish(errorResult("others", e.message ?: "Could not open the camera"))
-    }
-  }
-
-  private fun fileProviderAuthority() = "${reactContext.packageName}.mediapickerprovider"
-
-  private fun handleCaptureResult(resultCode: Int, data: Intent?) {
-    val output = pendingCaptureFile
-    val isVideo = pendingCaptureIsVideo
-
-    if (resultCode != Activity.RESULT_OK) {
-      output?.delete()
-      return finish(cancelledResult())
-    }
-
-    val options = pendingOptions ?: return finish(errorResult("others", "Lost picker options"))
-
-    worker.execute {
-      try {
-        // Our own output file wins whenever the camera actually wrote to it.
-        // Camera apps routinely echo the EXTRA_OUTPUT uri back in data.data, so
-        // treating a non-null data.data as "the camera ignored EXTRA_OUTPUT"
-        // would delete the very file that uri points at.
-        val written = output?.takeIf { it.exists() && it.length() > 0L }
-        val returned = data?.data
-
-        val file: File
-        val mime: String
-        when {
-          written != null -> {
-            file = written
-            mime = if (isVideo) "video/mp4" else "image/jpeg"
-          }
-          returned != null -> {
-            // The camera ignored EXTRA_OUTPUT and kept the media somewhere of
-            // its own choosing, so copy it into our cache before reporting it.
-            output?.delete()
-            mime = MediaUtils.mimeType(reactContext, returned)
-              .takeIf { it != "application/octet-stream" }
-              ?: if (isVideo) "video/mp4" else "image/jpeg"
-            file = MediaUtils.copyToCache(reactContext, returned, MediaUtils.extensionFor(mime, false))
-            if (!file.exists() || file.length() == 0L) {
-              file.delete()
-              return@execute finish(cancelledResult())
-            }
-          }
-          else -> {
-            // RESULT_OK with nothing written is a cancel in every way the
-            // caller cares about.
-            output?.delete()
-            return@execute finish(cancelledResult())
-          }
-        }
-
-        deliver(listOf(processCaptured(file, mime, options)), listOf(null), options)
-      } catch (e: Exception) {
-        finish(errorResult("cannot_process_asset", e.message ?: "Could not read the capture"))
-      }
-    }
-  }
-
-  private fun processCaptured(source: File, mime: String, options: ReadableMap): Processed {
-    if (MediaUtils.isVideo(mime)) return Processed(source, mime, source.name)
-
-    val forceJpg = !options.hasKey("forceJpg") || options.getBoolean("forceJpg")
-    val file = MediaUtils.processImage(
-      context = reactContext,
-      source = source,
-      mime = mime,
-      maxWidth = intOr(options, "maxWidth", 0),
-      maxHeight = intOr(options, "maxHeight", 0),
-      quality = doubleOr(options, "quality", 1.0),
-      forceJpg = forceJpg
-    )
-    return Processed(file, if (forceJpg) "image/jpeg" else mime, file.name)
-  }
-
-  // --- cropping -----------------------------------------------------------
-
-  private fun startCrop(activity: Activity, source: Uri, options: ReadableMap) {
-    val cropWidth = intOr(options, "cropWidth", 0)
-    val cropHeight = intOr(options, "cropHeight", 0)
-    val freeStyle = options.hasKey("freeStyleCropEnabled") && options.getBoolean("freeStyleCropEnabled")
-    val circle = options.hasKey("cropperCircleOverlay") && options.getBoolean("cropperCircleOverlay")
-    val output = MediaUtils.newCacheFile(reactContext, "jpg")
-
-    val cropOptions = CropImageOptions().apply {
-      activityTitle = options.getString("cropperToolbarTitle") ?: "Edit Photo"
-      // Documented as a cross-platform option, so the Android confirm action has
-      // to carry it too; left unset the cropper falls back to its own "CROP".
-      options.getString("cropperChooseText")?.let { cropMenuCropButtonTitle = it }
-      cropShape = if (circle) CropImageView.CropShape.OVAL else CropImageView.CropShape.RECTANGLE
-      guidelines = CropImageView.Guidelines.ON_TOUCH
-      customOutputUri = Uri.fromFile(output)
-      outputCompressFormat = android.graphics.Bitmap.CompressFormat.JPEG
-      outputCompressQuality = (doubleOr(options, "quality", 1.0) * 100).toInt().coerceIn(1, 100)
-      imageSourceIncludeGallery = false
-      imageSourceIncludeCamera = false
-
-      if (cropWidth > 0 && cropHeight > 0) {
-        fixAspectRatio = !freeStyle
-        aspectRatioX = cropWidth
-        aspectRatioY = cropHeight
-        outputRequestWidth = cropWidth
-        outputRequestHeight = cropHeight
-        // outputRequestWidth/Height are inert on their own: the default
-        // outputRequestSizeOptions is NONE, which makes the cropper ignore them
-        // and emit the crop at source resolution. A locked aspect ratio can be
-        // resized exactly; a free-form crop has to fit inside to avoid stretching.
-        outputRequestSizeOptions = if (freeStyle) {
-          CropImageView.RequestSizeOptions.RESIZE_INSIDE
-        } else {
-          CropImageView.RequestSizeOptions.RESIZE_EXACT
-        }
-      }
-
-      parseColor(options.getString("cropperToolbarColor"))?.let { toolbarColor = it }
-      parseColor(options.getString("cropperActiveWidgetColor"))?.let { activityMenuIconColor = it }
-    }
-
-    try {
-      val intent = CropImageContract().createIntent(
-        activity,
-        CropImageContractOptions(source, cropOptions)
-      )
-      activity.startActivityForResult(intent, RC_CROP)
-    } catch (e: Exception) {
-      finish(errorResult("crop_failed", e.message ?: "Could not open the cropper"))
-    }
-  }
-
-  private fun handleCropResult(resultCode: Int, data: Intent?) {
-    if (resultCode != Activity.RESULT_OK || data == null) {
-      return finish(cancelledResult())
-    }
-
-    val options = pendingOptions ?: return finish(errorResult("others", "Lost picker options"))
-    worker.execute {
-      try {
-        val result = CropImageContract().parseResult(resultCode, data)
-        if (!result.isSuccessful) {
-          return@execute finish(
-            errorResult("crop_failed", result.error?.message ?: "Cropping failed")
-          )
-        }
-        val path = result.uriContent?.path
-          ?: return@execute finish(errorResult("crop_failed", "Cropper returned no file"))
-
-        val file = File(path)
-        val cropRect = result.cropRect?.let {
-          Arguments.createMap().apply {
-            putInt("x", it.left)
-            putInt("y", it.top)
-            putInt("width", it.width())
-            putInt("height", it.height())
-          }
-        }
-        val processed = try {
-          withCancellation { compressToBudget(Processed(file, "image/jpeg", file.name), options) }
-        } catch (e: Exception) {
-          return@execute finish(
-            errorResult("compress_failed", e.message ?: "Could not compress the image")
-          )
-        }
-        val assets = Arguments.createArray()
-        assets.pushMap(buildAsset(processed, pendingOriginalUri, options, cropRect))
-        finish(successResult(assets))
-      } catch (e: Exception) {
-        finish(errorResult("crop_failed", e.message ?: "Cropping failed"))
-      }
-    }
-  }
-
-  // --- result building ----------------------------------------------------
-
-  private fun buildAsset(
-    processed: Processed,
-    originalUri: String?,
-    options: ReadableMap,
-    cropRect: WritableMap?
-  ): WritableMap {
-    val map = Arguments.createMap()
-    val file = processed.file
-
-    map.putString("uri", "file://${file.absolutePath}")
-    map.putString("fileName", processed.displayName)
-    map.putDouble("fileSize", file.length().toDouble())
-    map.putString("type", processed.mime)
-
-    if (MediaUtils.isVideo(processed.mime)) {
-      val meta = MediaUtils.videoMeta(file)
-      map.putInt("width", meta.width)
-      map.putInt("height", meta.height)
-      map.putDouble("duration", meta.durationMs.toDouble())
-      map.putDouble("bitrate", meta.bitrate.toDouble())
-    } else {
-      val (w, h) = MediaUtils.imageDimensions(file)
-      map.putInt("width", w)
-      map.putInt("height", h)
-      if (options.hasKey("includeExif") && options.getBoolean("includeExif")) {
-        map.putMap("exif", MediaUtils.exifMap(file))
-      }
-      if (options.hasKey("includeBase64") && options.getBoolean("includeBase64")) {
-        map.putString("base64", MediaUtils.base64(file))
-      }
-    }
-
-    if (options.hasKey("includeExtra") && options.getBoolean("includeExtra")) {
-      map.putString("id", processed.displayName)
-      map.putString("timestamp", file.lastModified().toString())
-    }
-    originalUri?.let { map.putString("originalPath", it) }
-    cropRect?.let { map.putMap("cropRect", it) }
-    processed.compressionSkipped?.let { map.putString("compressionSkipped", it) }
-    return map
   }
 
   private fun emitProgress(progress: Double, index: Int, total: Int) {
@@ -788,27 +447,6 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
       putInt("index", index)
       putInt("total", total)
     })
-  }
-
-  private fun successResult(
-    assets: WritableArray,
-    deselected: List<String> = emptyList()
-  ): WritableMap = Arguments.createMap().apply {
-    putBoolean("didCancel", false)
-    putArray("assets", assets)
-    putArray("deselected", Arguments.fromList(deselected))
-  }
-
-  private fun cancelledResult(): WritableMap = Arguments.createMap().apply {
-    putBoolean("didCancel", true)
-    putArray("assets", Arguments.createArray())
-  }
-
-  private fun errorResult(code: String, message: String): WritableMap = Arguments.createMap().apply {
-    putBoolean("didCancel", false)
-    putString("errorCode", code)
-    putString("errorMessage", message)
-    putArray("assets", Arguments.createArray())
   }
 
   private fun finish(result: WritableMap) {
@@ -820,28 +458,5 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     pendingCaptureFile = null
     pendingCaptureIsVideo = false
     promise?.resolve(result)
-  }
-
-  // --- small readers ------------------------------------------------------
-
-  private fun intOr(map: ReadableMap, key: String, fallback: Int) =
-    if (map.hasKey(key) && !map.isNull(key)) map.getInt(key) else fallback
-
-  private fun longOr(map: ReadableMap, key: String, fallback: Long = 0L) =
-    if (map.hasKey(key) && !map.isNull(key)) map.getDouble(key).toLong() else fallback
-
-  private fun doubleOr(map: ReadableMap, key: String, fallback: Double) =
-    if (map.hasKey(key) && !map.isNull(key)) map.getDouble(key) else fallback
-
-  private fun readStringArray(map: ReadableMap, key: String): List<String> {
-    if (!map.hasKey(key) || map.isNull(key)) return emptyList()
-    val array = map.getArray(key) ?: return emptyList()
-    return (0 until array.size()).mapNotNull { array.getString(it) }
-  }
-
-  private fun parseColor(hex: String?): Int? = try {
-    if (hex.isNullOrBlank()) null else Color.parseColor(hex)
-  } catch (_: Exception) {
-    null
   }
 }
