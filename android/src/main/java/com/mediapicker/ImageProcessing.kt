@@ -169,15 +169,19 @@ object ImageProcessing {
 
   /** Highest JPEG quality that still fits, or null when even the lowest does not. */
   private fun encodeUnderLimit(bitmap: Bitmap, maxBytes: Long): ByteArray? {
-    var low = MIN_JPEG_QUALITY
+    fun encode(quality: Int) = ByteArrayOutputStream().use { stream ->
+      bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+      stream.toByteArray()
+    }
+
+    // The floor first: when even it overflows, no quality will fit at this size,
+    // and finding that out by bisection would cost a whole search per halving.
+    var best = encode(MIN_JPEG_QUALITY).takeIf { it.size <= maxBytes } ?: return null
+    var low = MIN_JPEG_QUALITY + 1
     var high = MAX_JPEG_QUALITY
-    var best: ByteArray? = null
     while (low <= high) {
       val quality = (low + high) / 2
-      val bytes = ByteArrayOutputStream().use { stream ->
-        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
-        stream.toByteArray()
-      }
+      val bytes = encode(quality)
       if (bytes.size <= maxBytes) {
         best = bytes
         low = quality + 1

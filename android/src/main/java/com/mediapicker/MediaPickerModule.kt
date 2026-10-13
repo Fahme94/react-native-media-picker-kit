@@ -42,12 +42,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
 
   private val worker = Executors.newSingleThreadExecutor()
 
-  private var pendingPromise: Promise? = null
-  private var pendingOptions: ReadableMap? = null
-  private var pendingPick: GalleryPicker.Plan? = null
-  private var pendingOriginalUri: String? = null
-  private var pendingCaptureFile: File? = null
-  private var pendingCaptureIsVideo = false
+  private val pending = PendingCall()
 
   // Set for as long as a batch of assets is being compressed, so cancelCompression
   // has something to cancel. Volatile because it is read from the worker thread
@@ -84,37 +79,32 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
 
   override fun pickMedia(options: ReadableMap, promise: Promise) {
     val activity = currentActivity
-      ?: return promise.resolve(Results.error("others", "No foreground activity"))
-    if (pendingPromise != null) {
-      return promise.resolve(Results.error("picker_busy", "A picker is already open"))
+      ?: return promise.resolve(Results.error(ErrorCode.OTHERS, "No foreground activity"))
+    if (!pending.claim(promise, options)) {
+      return promise.resolve(Results.error(ErrorCode.PICKER_BUSY, "A picker is already open"))
     }
 
     val plan = gallery.plan(activity, options)
     if (plan.limit <= 0 && options.intOr("selectionLimit", 1) > 0) {
       // Every slot is taken by preselected items the picker cannot show, so
       // there is nothing the user could add or untick.
-      return promise.resolve(Results.success(Arguments.createArray()))
+      return finish(Results.success(Arguments.createArray()))
     }
 
-    pendingPromise = promise
-    pendingOptions = options
-    pendingPick = plan
+    pending.pick = plan
     try {
       activity.startActivityForResult(gallery.intent(activity, options, plan), RC_PICK)
     } catch (e: Exception) {
-      finish(Results.error("others", e.message ?: "Could not open the picker"))
+      finish(Results.error(ErrorCode.OTHERS, e.message ?: "Could not open the picker"))
     }
   }
 
   override fun captureMedia(options: ReadableMap, promise: Promise) {
     val activity = currentActivity
-      ?: return promise.resolve(Results.error("others", "No foreground activity"))
-    if (pendingPromise != null) {
-      return promise.resolve(Results.error("picker_busy", "A picker is already open"))
+      ?: return promise.resolve(Results.error(ErrorCode.OTHERS, "No foreground activity"))
+    if (!pending.claim(promise, options)) {
+      return promise.resolve(Results.error(ErrorCode.PICKER_BUSY, "A picker is already open"))
     }
-
-    pendingPromise = promise
-    pendingOptions = options
 
     if (camera.permissionMissing(activity)) {
       requestCameraPermission(activity)
@@ -125,25 +115,23 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
 
   override fun cropImage(options: ReadableMap, promise: Promise) {
     val activity = currentActivity
-      ?: return promise.resolve(Results.error("others", "No foreground activity"))
-    if (pendingPromise != null) {
-      return promise.resolve(Results.error("picker_busy", "A picker is already open"))
+      ?: return promise.resolve(Results.error(ErrorCode.OTHERS, "No foreground activity"))
+    if (!pending.claim(promise, options)) {
+      return promise.resolve(Results.error(ErrorCode.PICKER_BUSY, "A picker is already open"))
     }
     val path = options.getString("path")
     if (path.isNullOrBlank()) {
-      return promise.resolve(Results.error("invalid_options", "path is required"))
+      return finish(Results.error(ErrorCode.INVALID_OPTIONS, "path is required"))
     }
 
-    pendingPromise = promise
-    pendingOptions = options
-    pendingOriginalUri = path
+    pending.originalUri = path
     startCrop(activity, Uri.fromFile(File(path.removePrefix("file://"))), options)
   }
 
   override fun compressMedia(options: ReadableMap, promise: Promise) {
     val path = options.getString("path")
     if (path.isNullOrBlank()) {
-      return promise.resolve(Results.error("invalid_options", "path is required"))
+      return promise.resolve(Results.error(ErrorCode.INVALID_OPTIONS, "path is required"))
     }
 
     // No UI, so this neither claims the picker slot nor minds that one is open.
@@ -152,13 +140,13 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
         val file = File(path.removePrefix("file://"))
         if (!file.exists()) {
           return@execute promise.resolve(
-            Results.error("cannot_process_asset", "There is no file at $path")
+            Results.error(ErrorCode.CANNOT_PROCESS_ASSET, "There is no file at $path")
           )
         }
         val mime = MediaFiles.mimeForPath(file.name)
         if (!mime.startsWith("image/") && !mime.startsWith("video/")) {
           return@execute promise.resolve(
-            Results.error("invalid_options", "$path is neither an image nor a video")
+            Results.error(ErrorCode.INVALID_OPTIONS, "$path is neither an image nor a video")
           )
         }
 
@@ -166,7 +154,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
           withCancellation { compressToBudget(Processed(file, mime, file.name), options) }
         } catch (e: Exception) {
           return@execute promise.resolve(
-            Results.error("compress_failed", e.message ?: "Could not compress the media")
+            Results.error(ErrorCode.COMPRESS_FAILED, e.message ?: "Could not compress the media")
           )
         }
 
@@ -175,7 +163,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(Results.success(assets))
       } catch (e: Exception) {
         promise.resolve(
-          Results.error("cannot_process_asset", e.message ?: "Could not read the file")
+          Results.error(ErrorCode.CANNOT_PROCESS_ASSET, e.message ?: "Could not read the file")
         )
       }
     }
@@ -205,8 +193,8 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
       return finish(Results.cancelled())
     }
 
-    val options = pendingOptions ?: return finish(Results.error("others", "Lost picker options"))
-    val plan = pendingPick ?: GalleryPicker.Plan(options.intOr("selectionLimit", 1), emptyList())
+    val options = pending.options ?: return finish(Results.error(ErrorCode.OTHERS, "Lost picker options"))
+    val plan = pending.pick ?: GalleryPicker.Plan(options.intOr("selectionLimit", 1), emptyList())
     val selection = gallery.selection(data, options, plan) ?: return finish(Results.cancelled())
 
     if (selection.fresh.isEmpty()) {
@@ -218,7 +206,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
         val files = selection.fresh.map { uri -> gallery.copyIn(uri, options) }
         deliver(files, selection.fresh.map { it.toString() }, options, selection.deselected)
       } catch (e: Exception) {
-        finish(Results.error("cannot_process_asset", e.message ?: "Could not read the selected media"))
+        finish(Results.error(ErrorCode.CANNOT_PROCESS_ASSET, e.message ?: "Could not read the selected media"))
       }
     }
   }
@@ -227,7 +215,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
 
   private fun requestCameraPermission(activity: Activity) {
     val permissionAware = activity as? PermissionAwareActivity
-      ?: return finish(Results.error("permission", "Activity cannot request permissions"))
+      ?: return finish(Results.error(ErrorCode.PERMISSION, "Activity cannot request permissions"))
 
     permissionAware.requestPermissions(
       arrayOf(Manifest.permission.CAMERA),
@@ -237,11 +225,11 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
           val granted = grantResults.isNotEmpty() &&
             grantResults[0] == PackageManager.PERMISSION_GRANTED
           if (!granted) {
-            finish(Results.error("permission", "Camera permission was denied"))
+            finish(Results.error(ErrorCode.PERMISSION, "Camera permission was denied"))
           } else {
             val current = currentActivity
             if (current == null) {
-              finish(Results.error("others", "No foreground activity"))
+              finish(Results.error(ErrorCode.OTHERS, "No foreground activity"))
             } else {
               launchCapture(current)
             }
@@ -253,34 +241,34 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun launchCapture(activity: Activity) {
-    val options = pendingOptions ?: return finish(Results.error("others", "Lost picker options"))
+    val options = pending.options ?: return finish(Results.error(ErrorCode.OTHERS, "Lost picker options"))
     val isVideo = options.getString("mediaType") == "video"
     val output = MediaFiles.newCacheFile(reactContext, if (isVideo) "mp4" else "jpg")
 
-    pendingCaptureFile = output
-    pendingCaptureIsVideo = isVideo
+    pending.captureFile = output
+    pending.captureIsVideo = isVideo
 
     try {
       // No <queries> entry is needed: package visibility filters resolveActivity,
       // not the ability to start an implicit intent.
       activity.startActivityForResult(camera.intent(options, isVideo, output), RC_CAPTURE)
     } catch (e: ActivityNotFoundException) {
-      finish(Results.error("camera_unavailable", "No camera app is available"))
+      finish(Results.error(ErrorCode.CAMERA_UNAVAILABLE, "No camera app is available"))
     } catch (e: Exception) {
-      finish(Results.error("others", e.message ?: "Could not open the camera"))
+      finish(Results.error(ErrorCode.OTHERS, e.message ?: "Could not open the camera"))
     }
   }
 
   private fun handleCaptureResult(resultCode: Int, data: Intent?) {
-    val output = pendingCaptureFile
-    val isVideo = pendingCaptureIsVideo
+    val output = pending.captureFile
+    val isVideo = pending.captureIsVideo
 
     if (resultCode != Activity.RESULT_OK) {
       output?.delete()
       return finish(Results.cancelled())
     }
 
-    val options = pendingOptions ?: return finish(Results.error("others", "Lost picker options"))
+    val options = pending.options ?: return finish(Results.error(ErrorCode.OTHERS, "Lost picker options"))
 
     worker.execute {
       try {
@@ -288,7 +276,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
           ?: return@execute finish(Results.cancelled())
         deliver(listOf(processed), listOf(null), options)
       } catch (e: Exception) {
-        finish(Results.error("cannot_process_asset", e.message ?: "Could not read the capture"))
+        finish(Results.error(ErrorCode.CANNOT_PROCESS_ASSET, e.message ?: "Could not read the capture"))
       }
     }
   }
@@ -299,7 +287,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     try {
       activity.startActivityForResult(cropper.intent(activity, source, options), RC_CROP)
     } catch (e: Exception) {
-      finish(Results.error("crop_failed", e.message ?: "Could not open the cropper"))
+      finish(Results.error(ErrorCode.CROP_FAILED, e.message ?: "Could not open the cropper"))
     }
   }
 
@@ -308,7 +296,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
       return finish(Results.cancelled())
     }
 
-    val options = pendingOptions ?: return finish(Results.error("others", "Lost picker options"))
+    val options = pending.options ?: return finish(Results.error(ErrorCode.OTHERS, "Lost picker options"))
     worker.execute {
       try {
         val cropped = cropper.result(resultCode, data)
@@ -318,14 +306,14 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
           }
         } catch (e: Exception) {
           return@execute finish(
-            Results.error("compress_failed", e.message ?: "Could not compress the image")
+            Results.error(ErrorCode.COMPRESS_FAILED, e.message ?: "Could not compress the image")
           )
         }
         val assets = Arguments.createArray()
-        assets.pushMap(Results.asset(processed, pendingOriginalUri, options, cropped.cropRect))
+        assets.pushMap(Results.asset(processed, pending.originalUri, options, cropped.cropRect))
         finish(Results.success(assets))
       } catch (e: Exception) {
-        finish(Results.error("crop_failed", e.message ?: "Cropping failed"))
+        finish(Results.error(ErrorCode.CROP_FAILED, e.message ?: "Cropping failed"))
       }
     }
   }
@@ -345,8 +333,8 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
   ) {
     if (options.flag("cropping") && files.size == 1 && !MediaFiles.isVideo(files[0].mime)) {
       val activity = currentActivity
-        ?: return finish(Results.error("others", "No foreground activity"))
-      pendingOriginalUri = originalUris.firstOrNull()
+        ?: return finish(Results.error(ErrorCode.OTHERS, "No foreground activity"))
+      pending.originalUri = originalUris.firstOrNull()
       activity.runOnUiThread {
         startCrop(activity, Uri.fromFile(files[0].file), options)
       }
@@ -360,7 +348,7 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
         }
       }
     } catch (e: Exception) {
-      return finish(Results.error("compress_failed", e.message ?: "Could not compress the media"))
+      return finish(Results.error(ErrorCode.COMPRESS_FAILED, e.message ?: "Could not compress the media"))
     }
 
     val assets = Arguments.createArray()
@@ -449,14 +437,5 @@ class MediaPickerModule(private val reactContext: ReactApplicationContext) :
     })
   }
 
-  private fun finish(result: WritableMap) {
-    val promise = pendingPromise
-    pendingPromise = null
-    pendingOptions = null
-    pendingPick = null
-    pendingOriginalUri = null
-    pendingCaptureFile = null
-    pendingCaptureIsVideo = false
-    promise?.resolve(result)
-  }
+  private fun finish(result: WritableMap) = pending.finish(result)
 }

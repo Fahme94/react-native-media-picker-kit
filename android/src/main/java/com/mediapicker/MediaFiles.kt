@@ -88,7 +88,7 @@ object MediaFiles {
    * are ever removed.
    */
   internal fun deleteIfOurs(context: Context, file: File) {
-    if (file.absolutePath.startsWith(cacheDir(context).absolutePath)) file.delete()
+    if (isInCacheDir(context, file)) file.delete()
   }
 
   fun deleteTemp(context: Context, path: String) {
@@ -99,6 +99,13 @@ object MediaFiles {
     }
     val file = File(path.removePrefix("file://"))
     // Only ever delete inside our own cache dir.
-    if (file.absolutePath.startsWith(dir.absolutePath)) file.delete()
+    if (isInCacheDir(context, file)) file.delete()
   }
+
+  /**
+   * Resolved before comparing, so neither `rn_media_picker/../../files/x` nor a
+   * sibling such as `rn_media_picker2/x` passes for a file of ours.
+   */
+  private fun isInCacheDir(context: Context, file: File): Boolean =
+    file.canonicalPath.startsWith(cacheDir(context).canonicalPath + File.separator)
 }

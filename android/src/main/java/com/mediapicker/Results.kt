@@ -15,6 +15,18 @@ internal data class Processed(
   val compressionSkipped: String? = null
 )
 
+/** Every `errorCode` the module reports; mirrors `ErrorCode` in src/types.ts. */
+internal object ErrorCode {
+  const val PERMISSION = "permission"
+  const val CANNOT_PROCESS_ASSET = "cannot_process_asset"
+  const val CROP_FAILED = "crop_failed"
+  const val COMPRESS_FAILED = "compress_failed"
+  const val CAMERA_UNAVAILABLE = "camera_unavailable"
+  const val INVALID_OPTIONS = "invalid_options"
+  const val PICKER_BUSY = "picker_busy"
+  const val OTHERS = "others"
+}
+
 internal object Results {
 
   fun asset(
