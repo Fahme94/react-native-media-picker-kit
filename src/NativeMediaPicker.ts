@@ -38,6 +38,17 @@ export interface Spec extends TurboModule {
   }>;
 
   /**
+   * Fires while a video is copied out of the photo library or rewrapped as
+   * MP4, before any compression. `stage` is 'loading' or 'converting'.
+   */
+  readonly onProcessProgress: EventEmitter<{
+    stage: string;
+    progress: number;
+    index: number;
+    total: number;
+  }>;
+
+  /**
    * Stop the video compression that is currently running, if any. The call it
    * belongs to still resolves, with the asset uncompressed.
    */

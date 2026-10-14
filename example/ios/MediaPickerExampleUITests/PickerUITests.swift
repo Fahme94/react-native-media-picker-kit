@@ -15,7 +15,15 @@ final class PickerUITests: XCTestCase {
     // TurboModule resolved and a native round trip came back.
     XCTAssertTrue(resultText(containing: "native round trip OK", timeout: 60) != nil,
                   "module did not load")
+  }
 
+  /// Recording the docs GIFs sets UI_TEST_HOLD (seconds) so the result stays on
+  /// screen long enough to see; xcodebuild passes it on from
+  /// TEST_RUNNER_UI_TEST_HOLD. Ordinary runs leave it unset.
+  override func tearDownWithError() throws {
+    if let hold = ProcessInfo.processInfo.environment["UI_TEST_HOLD"].flatMap(UInt32.init) {
+      sleep(hold)
+    }
   }
 
   // MARK: - helpers
@@ -43,10 +51,12 @@ final class PickerUITests: XCTestCase {
       if app.state == .runningForeground {
         // The JSON shows up both as its own static text and inside the label of
         // the container that wraps it, so check both rather than assume one.
+        // Matched by predicate rather than walked by index: React Native
+        // re-renders while this polls, and an index taken a moment earlier can
+        // point past the end of the list by the time it is read.
         for query in [app.staticTexts, app.otherElements] {
-          for element in query.allElementsBoundByIndex where element.label.contains(needle) {
-            return element.label
-          }
+          let match = query.matching(NSPredicate(format: "label CONTAINS %@", needle)).firstMatch
+          if match.exists { return match.label }
         }
       }
       usleep(500_000)
@@ -128,6 +138,94 @@ final class PickerUITests: XCTestCase {
     XCTAssertNotNil(json)
   }
 
+  /// The budget is checked on the bytes that reach JS, after the pick.
+  func test10PickUnderABudget() throws {
+    tap("Photo ≤500KB")
+    tapPickerCell(0)
+    let json = nextResult(after: nil, containing: "fileSize")
+    report("budget", json)
+    guard let asset = (resultObject(in: json)?["assets"] as? [[String: Any]])?.first,
+          let size = asset["fileSize"] as? Int
+    else { return XCTFail("no asset in \(json ?? "<none>")") }
+    XCTAssertLessThanOrEqual(size, 500 * 1024, "over budget")
+  }
+
+  /// cropImage called on its own, on a file already on disk. It runs on the
+  /// module's queue rather than after a pick, so this is the path that has to
+  /// hop to main itself before presenting the cropper.
+  func test11CropImageOnAFileOnDisk() throws {
+    tap("Pick → cropImage 300×300")
+    tapPickerCell(0)
+
+    let choose = app.buttons["Choose"]
+    XCTAssertTrue(choose.waitForExistence(timeout: 30), "cropper never appeared")
+    choose.tap()
+
+    let json = nextResult(after: nil, containing: "cropRect")
+    report("crop-image", json)
+    guard let asset = (resultObject(in: json)?["assets"] as? [[String: Any]])?.first
+    else { return XCTFail("no asset in \(json ?? "<none>")") }
+    XCTAssertEqual(asset["width"] as? Int, 300)
+    XCTAssertEqual(asset["height"] as? Int, 300)
+    XCTAssertTrue((asset["originalPath"] as? String)?.hasPrefix("file://") == true,
+                  "originalPath should be the path that was cropped")
+  }
+
+  /// PHPicker loads a multi-selection concurrently, so this proves the assets
+  /// still come back in the order the user tapped them. Each cell's identifier is
+  /// learned from a single pick first, then the three are multi-picked out of
+  /// grid order.
+  func test5bMultiSelectKeepsPickOrder() throws {
+    var identifiers: [String] = []
+    var previous: String? = nil
+    for cell in 0..<3 {
+      tap("Photo")
+      tapPickerCell(cell)
+      previous = nextResult(after: previous, containing: "originalPath")
+      let paths = originalPaths(in: previous)
+      XCTAssertEqual(paths.count, 1, "single pick of cell \(cell) returned \(paths)")
+      identifiers += paths
+    }
+
+    tap("Photos ×3")
+    for cell in [2, 0, 1] { tapPickerCell(cell) }
+    confirmMultiSelect()
+    let json = nextResult(after: previous, containing: "\"assets\"")
+    report("multi-order", json)
+
+    XCTAssertEqual(originalPaths(in: json),
+                   [identifiers[2], identifiers[0], identifiers[1]],
+                   "assets did not come back in the order they were picked")
+  }
+
+  /// The result view only changes when a call resolves, so wait for text that
+  /// differs from the last result rather than for any result at all.
+  private func nextResult(after previous: String?, containing needle: String) -> String? {
+    let deadline = Date().addingTimeInterval(45)
+    while Date() < deadline {
+      if let text = resultText(containing: needle, timeout: 1), text != previous {
+        return text
+      }
+    }
+    return nil
+  }
+
+  /// The result JSON inside a matched label. When the match is the container
+  /// rather than the log text, its label also carries every button label before
+  /// the JSON and the scroll bars' descriptions after it, so cut from the first
+  /// brace to the last.
+  private func resultObject(in text: String?) -> [String: Any]? {
+    guard let text, let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+          start < end
+    else { return nil }
+    return try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any]
+  }
+
+  private func originalPaths(in text: String?) -> [String] {
+    guard let assets = resultObject(in: text)?["assets"] as? [[String: Any]] else { return [] }
+    return assets.compactMap { $0["originalPath"] as? String }
+  }
+
   private func confirmMultiSelect() {
     sleep(1)
     let add = app.buttons["Add"].exists ? app.buttons["Add"] : app.buttons["Done"]
@@ -154,9 +252,7 @@ final class PickerUITests: XCTestCase {
     let second = resultText(containing: "holding 2 before", timeout: 45)
     report("preselect-second", second)
     XCTAssertNotNil(second)
-    let json = try XCTUnwrap(second?.components(separatedBy: "\n").dropFirst().joined(separator: "\n"))
-    let result = try XCTUnwrap(
-      JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    let result = try XCTUnwrap(resultObject(in: second), "no result JSON in \(second ?? "<none>")")
     XCTAssertEqual((result["assets"] as? [Any])?.count, 1, "only the new pick should come back")
     XCTAssertEqual((result["deselected"] as? [Any])?.count, 1, "the unticked pick should be deselected")
     XCTAssertTrue(control("Keep picking ×5 (2)").waitForExistence(timeout: 10),
@@ -168,22 +264,48 @@ final class PickerUITests: XCTestCase {
   /// So a simulator can prove that captureMedia opens the camera in the right
   /// mode and clears the permission gate, and nothing beyond that. The delegate
   /// path (temp file, asset build, crop hand-off) needs a physical device.
-  private func assertCameraPresented(mode: String) {
+  private func assertCameraPresented(mode: String) throws {
+    try waitForCamera()
+    // Older camera UIs show a mode switcher; newer ones drop it when only one
+    // mode is allowed, and the PhotoCapture shutter already says which one.
+    let modeButton = app.buttons["Camera Mode"]
+    if modeButton.exists {
+      XCTAssertEqual(modeButton.value as? String, mode, "camera opened in the wrong mode")
+    }
+    dismissCamera()
+  }
+
+  /// Older camera UIs give the close control an identifier; newer ones show a
+  /// plain Cancel button.
+  private func dismissCamera() {
+    let dismiss = app.buttons["DismissImagePickerButton"]
+    (dismiss.exists ? dismiss : app.buttons["Cancel"]).tap()
+  }
+
+  /// Clears the permission prompt and waits for the shutter. A simulator on a
+  /// host with no camera at all (a CI runner) reports the camera source as
+  /// unavailable, and captureMedia rightly resolves camera_unavailable instead,
+  /// so there is nothing to drive: skip, as the Android tests do.
+  @discardableResult
+  private func waitForCamera() throws -> XCUIElement {
     let allow = app.alerts.buttons["OK"]
     if allow.waitForExistence(timeout: 3) { allow.tap() }
 
     let shutter = app.buttons["PhotoCapture"]
-    XCTAssertTrue(shutter.waitForExistence(timeout: 30),
-                  "captureMedia did not present the camera")
-    let modeButton = app.buttons["Camera Mode"]
-    XCTAssertTrue(modeButton.exists, "camera mode control missing")
-    XCTAssertEqual(modeButton.value as? String, mode, "camera opened in the wrong mode")
-    app.buttons["DismissImagePickerButton"].tap()
+    let deadline = Date().addingTimeInterval(30)
+    while Date() < deadline {
+      if shutter.exists { return shutter }
+      if resultText(containing: "camera_unavailable", timeout: 1) != nil {
+        throw XCTSkip("this simulator has no camera")
+      }
+    }
+    XCTFail("captureMedia did not present the camera")
+    return shutter
   }
 
   func test6CapturePhotoPresentsCamera() throws {
     tap("Shoot photo")
-    assertCameraPresented(mode: "Photo")
+    try assertCameraPresented(mode: "Photo")
     let json = resultText(containing: "didCancel", timeout: 30)
     report("capture-dismiss", json)
     XCTAssertNotNil(json)
@@ -210,18 +332,14 @@ final class PickerUITests: XCTestCase {
   /// what would not pass is the shutter leaving the promise hanging.
   func test8CaptureShutter() throws {
     tap("Shoot photo")
-    let allow = app.alerts.buttons["OK"]
-    if allow.waitForExistence(timeout: 3) { allow.tap() }
-
-    let shutter = app.buttons["PhotoCapture"]
-    XCTAssertTrue(shutter.waitForExistence(timeout: 30), "camera never presented")
+    let shutter = try waitForCamera()
     shutter.tap()
 
     let use = app.buttons["Use Photo"]
     guard use.waitForExistence(timeout: 15) else {
       print("RESULT[capture-shutter]: no review sheet - simulator has no capture pipeline")
       XCTAssertTrue(shutter.exists, "the shutter neither captured nor left the camera up")
-      app.buttons["DismissImagePickerButton"].tap()
+      dismissCamera()
       return
     }
 

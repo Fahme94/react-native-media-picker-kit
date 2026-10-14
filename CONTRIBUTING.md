@@ -3,6 +3,25 @@
 Everything here is the detail that would clutter the README: why the native side is built the way it is,
 exactly what has been run on a device, and how a release goes out.
 
+## Code layout
+
+Both platforms split the native code the same way, one file per job:
+
+| Job | Android (`android/src/main/java/com/mediapicker/`) | iOS (`ios/`) |
+|---|---|---|
+| JS entry points, the open call, compression orchestration | `MediaPickerModule.kt`, `PendingCall.kt` | `MediaPicker.mm` |
+| Gallery picker | `GalleryPicker.kt` | `MPKGalleryPicker` |
+| Camera | `CameraCapture.kt` | `MPKCameraCapture` |
+| Cropper | `Cropper.kt` | `MPKCropper` |
+| Image resize, re-encode, compression, EXIF | `ImageProcessing.kt` | `MPKImageProcessing` |
+| Video metadata and compression | `VideoProcessing.kt` | `MPKVideoProcessing` |
+| Temp directory, MIME types, cleanup | `MediaFiles.kt` | `MPKMediaFiles` |
+| Result and asset maps, error codes | `Results.kt` | `MPKResults` |
+
+Error codes have one owner per platform (`ErrorCode` in `Results.kt`, `MPKError*` in `MPKResults.h`), and
+both mirror `ErrorCode` in `src/types.ts`. The iOS prefix is `MPK` because Apple's MediaPlayer framework
+already uses `MP`.
+
 ## Design notes
 
 **Codegen uses `UnsafeObject` for options and results** rather than generated structs. Generated structs for
@@ -27,6 +46,87 @@ gallery or the camera.
 auto-linking, so every framework the implementation touches has to be listed in `s.frameworks` or the app
 fails at link time with undefined PHPicker/AVFoundation symbols.
 
+## Checks
+
+From the repository root:
+
+```bash
+yarn lint        # ESLint and Prettier, warnings fail
+yarn format      # rewrite src/ and plugin/ with Prettier
+yarn typecheck
+yarn test        # JS unit tests for src/index.ts, native module mocked
+```
+
+CI (`.github/workflows/ci.yml`) runs these on every push to `main` and every pull request, then runs every
+native suite below on an emulator and a simulator.
+
+### Android
+
+With an emulator booted, from `example/android`:
+
+```bash
+./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest   # library tests
+./gradlew :app:connectedReleaseAndroidTest                           # UI tests
+```
+
+- **Library tests** (`android/src/androidTest`) — compression on a real encoder, the call slot and temp-file
+  safety (`SafetyTest`), and the decisions each flow makes once a system screen returns (`FlowLogicTest`).
+- **UI tests** (`example/android/app/src/androidTest`) — drive the example app through the real photo
+  picker, cropper and camera, and check the JSON it renders. They run against the release build, so the JS is
+  bundled and no Metro is needed, and they write their own photos into MediaStore and remove them after, so
+  they do not depend on the device's gallery. The camera tests skip when the camera app does not label its
+  shutter.
+
+### iOS
+
+From `example/ios`. `-configuration Release` bundles the JS, so the UI tests need no Metro:
+
+```bash
+xcodebuild test -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample \
+  -configuration Release -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+```
+
+- **`MediaPickerExampleUITests`** — XCUITests that drive the real PHPicker, camera and cropper, picking from
+  the sample photos every simulator ships with.
+- **`MediaPickerCaptureTests`** — unit tests hosted by the app. A simulator renders a camera but has no
+  capture pipeline behind it, so its shutter never fires the delegate and everything the module does *after*
+  a shot is unreachable from a UI test. These call that delegate directly with the same info dictionaries
+  `UIImagePickerController` produces, which runs the real temp-file write, asset builder and crop hand-off.
+  They also cover crop sizing, image processing, the call slot and temp-file safety.
+
+## Recording the docs GIFs
+
+The GIFs in `docs/media/` are recorded from the example app and converted with
+`scripts/mp4-to-gif.swift`, which needs nothing beyond Xcode's command line tools.
+
+**iOS**, from a UI test, so the taps are the same every time. `TEST_RUNNER_UI_TEST_HOLD` keeps the result
+on screen for that many seconds after the test, long enough to show up in the recording:
+
+```bash
+xcrun simctl io booted recordVideo --codec h264 --force pick.mp4 &
+TEST_RUNNER_UI_TEST_HOLD=4 xcodebuild test -workspace example/ios/MediaPickerExample.xcworkspace \
+  -scheme MediaPickerExample -configuration Release -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -only-testing:MediaPickerExampleUITests/PickerUITests/test1PickPhoto
+kill -INT %1
+```
+
+**Android**, on an emulator with the release APK installed, driving it by hand or with `adb shell input`.
+Record at half the screen size, or `screenrecord` falls back to a size that adds black bars:
+
+```bash
+adb shell screenrecord --size 672x1496 /sdcard/camera.mp4   # Ctrl+C to stop
+adb pull /sdcard/camera.mp4
+```
+
+Then trim and convert. `--from`/`--to` cut away the launch, `--speed` shortens a slow flow, and `--hold`
+keeps the last frame up when the result appears just before the recording ends:
+
+```bash
+swift scripts/mp4-to-gif.swift pick.mp4 docs/media/pick-ios.gif --from 9.5 --to 18
+```
+
+Keep each GIF under about 1 MB: 300 px wide at 8 frames a second does that for a 15 second flow.
+
 ## Running the example
 
 `example/` is a React Native CLI app that links the package and builds on both platforms.
@@ -39,22 +139,6 @@ yarn android            # or: yarn ios  (cd ios && pod install first)
 
 It renders one button per test case and dumps the raw `PickerResult` JSON on screen, so every option can be
 exercised by hand.
-
-## iOS test targets
-
-Both run from one command:
-
-```bash
-cd example/ios
-xcodebuild test -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
-```
-
-- **`MediaPickerExampleUITests`** — XCUITests that drive the real PHPicker, camera and cropper.
-- **`MediaPickerCaptureTests`** — unit tests hosted by the app. A simulator renders a camera but has no
-  capture pipeline behind it, so its shutter never fires the delegate and everything the module does *after*
-  a shot is unreachable from a UI test. These call that delegate directly with the same info dictionaries
-  `UIImagePickerController` produces, which runs the real temp-file write, asset builder and crop hand-off.
 
 ## Verification status
 
@@ -114,11 +198,27 @@ native sources, the podspec and the Expo plugin are published. `src` has to ship
 codegen reads the TurboModule spec out of it when the consuming app builds. `prepare` runs `bob build`,
 which npm invokes before packing, so a stale `lib` can't be published.
 
-```bash
-npm pack --dry-run   # 36 files, no build output, no example app
-npm publish
-git tag "v$(node -p "require('./package.json').version")" && git push --tags
-```
+1. Merge to `main` and wait for CI to pass on all three jobs.
+2. Set `version` in `package.json`, and in `CHANGELOG.md` replace `Unreleased` with the date and point the
+   version's compare link at the new tag.
+3. Point the README's GIFs at `main`. npm shows the README but not `docs/`, so relative image paths break
+   on the package page. Once the GIFs are on `main` the absolute URLs work everywhere, so this only needs
+   doing once:
+
+   ```bash
+   sed -i '' 's|src="docs/media/|src="https://raw.githubusercontent.com/Fahme94/react-native-media-picker/main/docs/media/|' README.md
+   ```
+
+4. Pack, publish and tag:
+
+   ```bash
+   npm pack --dry-run   # 58 files, no build output, no example app, no GIFs
+   npm publish
+   git tag "v$(node -p "require('./package.json').version")" && git push --tags
+   ```
+
+From 1.0.0 the package follows [Semantic Versioning](https://semver.org/): renaming or removing an option,
+a result field or an error code needs a major version. Adding one is a minor version.
 
 The podspec takes its version from `package.json` and its tag from `v<version>`, so tagging that way is what
 lets CocoaPods resolve a release.

@@ -3,6 +3,8 @@
 One flag. It behaves identically whether the image came from the gallery or the camera, because both
 paths converge on the same delivery step before the cropper is reached.
 
+<img src="media/crop-ios.gif" width="240" alt="Picking a photo and cropping it square on iOS" />
+
 ```ts
 const avatar = await pickMedia({
   mediaType: 'photo',

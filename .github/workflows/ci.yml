@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn lint
+      - run: yarn typecheck
+      - run: yarn test --coverage
+      - run: yarn prepare
+
+  android:
+    name: Android build and instrumented tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: |
+            yarn.lock
+            example/yarn.lock
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: yarn install --frozen-lockfile
+      - run: yarn install --frozen-lockfile
+        working-directory: example
+      - name: Build the example app
+        run: ./gradlew :app:assembleDebug
+        working-directory: example/android
+      # The emulator needs hardware acceleration, which Linux runners only
+      # expose once the runner user can open /dev/kvm.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # Library tests first, then the UI tests, which drive the example app's
+      # release build (JS bundled, so no Metro) through the real photo picker,
+      # cropper and camera. Camera tests skip when the image's camera app does
+      # not label its shutter.
+      - name: Run instrumented and UI tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          # Without a profile the AVD is 320x640, too small for the example
+          # app's buttons and its result view to share the screen.
+          profile: pixel_6
+          disable-animations: true
+          working-directory: example/android
+          # The test reports carry no logcat, so keep the device log alongside them.
+          script: |
+            adb logcat -c
+            adb logcat -v threadtime > logcat.txt 2>&1 &
+            ./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest
+            ./gradlew :app:connectedReleaseAndroidTest
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: |
+            android/build/reports/androidTests
+            example/android/app/build/reports/androidTests
+            example/android/logcat.txt
+
+  ios:
+    name: iOS capture and UI tests
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: |
+            yarn.lock
+            example/yarn.lock
+      - run: yarn install --frozen-lockfile
+      - run: yarn install --frozen-lockfile
+        working-directory: example
+      - uses: actions/cache@v4
+        with:
+          path: example/ios/Pods
+          key: pods-${{ runner.os }}-${{ hashFiles('example/ios/Podfile.lock') }}
+      - run: pod install
+        working-directory: example/ios
+      # Some runners come up with CoreSimulatorService unreachable, so xcodebuild
+      # lists no simulators at all. Restarting the service brings them back.
+      - name: Make sure the simulator exists
+        run: |
+          has_simulator() {
+            xcodebuild -showdestinations -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample | grep -q 'name:iPhone 16 Pro }'
+          }
+          if ! has_simulator; then
+            sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService || true
+            xcrun simctl list devices available
+            has_simulator || { echo "::error::iPhone 16 Pro simulator still unavailable"; exit 1; }
+          fi
+        working-directory: example/ios
+      # The capture tests drive the native delegates with media they generate
+      # themselves, so they need nothing but the simulator.
+      - name: Run capture tests
+        run: |
+          xcodebuild test \
+            -workspace MediaPickerExample.xcworkspace \
+            -scheme MediaPickerExample \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -only-testing:MediaPickerCaptureTests \
+            CODE_SIGNING_ALLOWED=NO
+        working-directory: example/ios
+      # The UI tests drive the real PHPicker, cropper and camera prompt. A
+      # Release build bundles its JS, so no Metro; the picks come from the
+      # sample photos every simulator ships with.
+      - name: Run UI tests
+        run: |
+          xcodebuild test \
+            -workspace MediaPickerExample.xcworkspace \
+            -scheme MediaPickerExample \
+            -configuration Release \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -only-testing:MediaPickerExampleUITests \
+            CODE_SIGNING_ALLOWED=NO
+        working-directory: example/ios

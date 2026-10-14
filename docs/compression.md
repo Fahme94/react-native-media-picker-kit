@@ -149,6 +149,23 @@ to `0.85` of the range and the correction finishes it, rather than restarting at
 throttled to whole percents, because the underlying encoders report far more often than any UI can
 use and every event costs a bridge crossing.
 
+### Before compression (iOS)
+
+On iOS a picked video has to be copied out of the photo library first, which includes downloading
+the original when it only lives in iCloud, and a QuickTime clip is then rewrapped as MP4. Both can
+take a while on a long clip, so they report too, on their own event:
+
+```ts
+const sub = addProcessProgressListener(({ stage, progress }) => {
+  // stage is 'loading' (copying from the library) or 'converting' (rewrapping as MP4)
+  setLabel(`${stage} ${Math.round(progress * 100)}%`);
+});
+```
+
+Each stage counts from `0` to `1` on its own, then compression starts from `0` on
+`addCompressProgressListener`. The values are the system's own: the library's load progress and the
+export session's. Photos do not report, and Android does not report these steps.
+
 ## Letting the user stop it
 
 A long transcode is worth being able to back out of:

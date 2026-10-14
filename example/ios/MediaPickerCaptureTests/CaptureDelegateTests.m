@@ -11,7 +11,7 @@
 /// hand-off on a simulator. What they deliberately do not cover is the camera
 /// itself — that a real shutter calls this delegate at all still needs hardware.
 ///
-/// Only three entry points are needed, so they are declared here and the class
+/// Only a few entry points are needed, so they are declared here and the class
 /// is reached by name; the test target then has no build dependency on the pod.
 @protocol MediaPickerProbe <NSObject>
 - (void)imagePickerController:(UIImagePickerController *)picker
@@ -22,6 +22,28 @@
                      angle:(NSInteger)angle;
 - (void)cancelCompression:(void (^)(id))resolve
                    reject:(void (^)(NSString *, NSString *, NSError *))reject;
+- (void)cleanTempFiles:(NSString *)path
+               resolve:(void (^)(id))resolve
+                reject:(void (^)(NSString *, NSString *, NSError *))reject;
+- (BOOL)claim:(void (^)(id))resolve options:(NSDictionary *)options;
+- (void)pickMedia:(NSDictionary *)options
+          resolve:(void (^)(id))resolve
+           reject:(void (^)(NSString *, NSString *, NSError *))reject;
+@end
+
+/// The helper classes, reached by name for the same reason as the module.
+@protocol MPKCropperProbe <NSObject>
++ (UIImage *)outputForCrop:(UIImage *)image options:(NSDictionary *)options;
+@end
+
+@protocol MPKImageProcessingProbe <NSObject>
++ (NSString *)processImageAtPath:(NSString *)path
+                         options:(NSDictionary *)options
+                            mime:(NSString **)mime;
+@end
+
+@protocol MPKResultsProbe <NSObject>
++ (NSDictionary *)successWithAssets:(NSArray *)assets deselected:(NSArray *)deselected;
 @end
 
 @interface CaptureDelegateTests : XCTestCase
@@ -42,6 +64,26 @@
   [module setValue:[^(id result) { onResult(result); } copy] forKey:@"pendingResolve"];
   [module setValue:options forKey:@"pendingOptions"];
   return module;
+}
+
+/// Calls cancelCompression once a batch is actually compressing. A cancel
+/// reaches only batches already running, so firing it on a timer races the
+/// capture's own start-up, which on a cold first test is slower than any fixed
+/// delay worth waiting.
+- (void)cancelOnceCompressing:(id<MediaPickerProbe>)module then:(nullable dispatch_block_t)then
+{
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    NSMutableSet *live = [(id)module valueForKey:@"liveCompressions"];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:30];
+    while ([deadline timeIntervalSinceNow] > 0) {
+      NSUInteger running;
+      @synchronized (live) { running = live.count; }
+      if (running > 0) break;
+      usleep(10000);
+    }
+    [module cancelCompression:^(id r) {} reject:^(NSString *a, NSString *b, NSError *e) {}];
+    if (then) then();
+  });
 }
 
 - (UIImage *)imageOfSize:(CGSize)size
@@ -206,7 +248,9 @@
 
   NSDictionary *asset = [self onlyAssetOf:result];
   [self assertFileBackedAsset:asset];
-  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+  // The camera records QuickTime; it comes back rewrapped as MP4.
+  XCTAssertEqualObjects(asset[@"type"], @"video/mp4");
+  XCTAssertTrue([asset[@"fileName"] hasSuffix:@".mp4"], @"the name must follow the bytes");
   XCTAssertEqualObjects(asset[@"width"], @320);
   XCTAssertEqualObjects(asset[@"height"], @240);
   XCTAssertEqualWithAccuracy([asset[@"duration"] doubleValue], 1000.0, 100.0,
@@ -338,12 +382,7 @@
     [done fulfill];
   }];
 
-  // Long enough for the copy to finish and the transcode to be underway, short
-  // enough that it cannot have completed.
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                 dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    [module cancelCompression:^(id r) {} reject:^(NSString *a, NSString *b, NSError *e) {}];
-  });
+  [self cancelOnceCompressing:module then:nil];
 
   [module imagePickerController:[UIImagePickerController new] didFinishPickingMediaWithInfo:@{
     UIImagePickerControllerMediaType: UTTypeMovie.identifier,
@@ -354,9 +393,48 @@
   [self assertFileBackedAsset:asset];
   XCTAssertEqualObjects(asset[@"compressionSkipped"], @"cancelled",
                         @"a cancel must say why the file is still over budget");
-  XCTAssertEqualObjects(asset[@"fileSize"], @(src), @"cancel should hand back the original");
-  // Untouched means not transcoded, so it is still the QuickTime copy.
-  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+  // Rewrapping as MP4 changes only the container, so the size barely moves and
+  // the frame keeps the size a transcode to a quarter of the bytes would not.
+  XCTAssertEqualWithAccuracy([asset[@"fileSize"] doubleValue], (double)src, src * 0.05,
+                             @"cancel should hand back the original");
+  XCTAssertEqualObjects(asset[@"width"], @1280);
+  XCTAssertEqualObjects(asset[@"type"], @"video/mp4");
+}
+
+/// A call turned away as busy is not a new batch, so it must not wipe out a
+/// cancel the user just asked for on the batch that is running.
+- (void)testABusyCallDoesNotUndoACancel
+{
+  NSURL *recording = [self writeMovieOfSize:CGSizeMake(1280, 720) frames:300 fps:30];
+  unsigned long long src =
+      [[[NSFileManager defaultManager] attributesOfItemAtPath:recording.path error:nil] fileSize];
+
+  __block NSDictionary *result = nil;
+  __block NSDictionary *busy = nil;
+  XCTestExpectation *done = [self expectationWithDescription:@"capture resolved"];
+  XCTestExpectation *turnedAway = [self expectationWithDescription:@"busy call resolved"];
+  id<MediaPickerProbe> module = [self moduleWithOptions:@{@"maxVideoFileSize": @(src / 4)}
+                                               onResult:^(NSDictionary *r) {
+    result = r;
+    [done fulfill];
+  }];
+
+  [self cancelOnceCompressing:module then:^{
+    [module pickMedia:@{} resolve:^(id r) {
+      busy = r;
+      [turnedAway fulfill];
+    } reject:^(NSString *a, NSString *b, NSError *e) {}];
+  }];
+
+  [module imagePickerController:[UIImagePickerController new] didFinishPickingMediaWithInfo:@{
+    UIImagePickerControllerMediaType: UTTypeMovie.identifier,
+    UIImagePickerControllerMediaURL: recording}];
+  [self waitForExpectations:@[done, turnedAway] timeout:120];
+
+  XCTAssertEqualObjects(busy[@"errorCode"], @"picker_busy");
+  NSDictionary *asset = [self onlyAssetOf:result];
+  XCTAssertEqualObjects(asset[@"compressionSkipped"], @"cancelled",
+                        @"the busy call cleared the cancel and the transcode ran to the end");
 }
 
 /// The point of the floor: a file that IS over its budget is still skipped,
@@ -376,13 +454,14 @@
 
   NSDictionary *asset = [self onlyAssetOf:result];
   [self assertFileBackedAsset:asset];
-  XCTAssertEqualObjects(asset[@"fileSize"], @(src), @"the floor should have skipped the transcode");
+  XCTAssertEqualWithAccuracy([asset[@"fileSize"] doubleValue], (double)src, src * 0.05,
+                             @"the floor should have skipped the transcode");
+  XCTAssertEqualObjects(asset[@"width"], @1280);
   XCTAssertGreaterThan([asset[@"fileSize"] unsignedLongLongValue], src / 2,
                        @"this only means anything if it was over budget");
   XCTAssertEqualObjects(asset[@"compressionSkipped"], @"below_minimum",
                         @"the caller has to be told why this file is over budget");
-  // Untouched means not transcoded, so it is still the QuickTime copy.
-  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+  XCTAssertEqualObjects(asset[@"type"], @"video/mp4");
 }
 
 /// A floor below the file must not stop real work happening.
@@ -453,8 +532,8 @@
 
   NSDictionary *asset = [self onlyAssetOf:result];
   [self assertFileBackedAsset:asset];
-  // Untouched means not transcoded, so it is still the QuickTime copy.
-  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+  // Not transcoded, only rewrapped: same frame, MP4 container.
+  XCTAssertEqualObjects(asset[@"type"], @"video/mp4");
   XCTAssertEqualObjects(asset[@"width"], @320);
 }
 
@@ -492,6 +571,167 @@
   [self assertFileBackedAsset:asset];
   XCTAssertLessThanOrEqual([self sizeOfAsset:asset], budget, @"the cropped image is over budget");
   XCTAssertEqualObjects(asset[@"cropRect"][@"width"], @2000, @"the crop rect must survive compression");
+}
+
+#pragma mark - the call slot
+
+/// Two JS calls racing for the picker: exactly one may hold it, or a second
+/// call's options would overwrite the first one's while it is still open.
+- (void)testExactlyOneOfManySimultaneousCallsGetsTheSlot
+{
+  for (NSInteger round = 0; round < 200; round++) {
+    id<MediaPickerProbe> module = [[NSClassFromString(@"MediaPicker") alloc] init];
+    __block NSInteger winners = 0;
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    for (NSInteger caller = 0; caller < 8; caller++) {
+      dispatch_group_async(group, queue, ^{
+        if ([module claim:^(id r) {} options:@{}]) {
+          @synchronized (self) { winners++; }
+        }
+      });
+    }
+    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+    XCTAssertEqual(winners, 1);
+  }
+}
+
+#pragma mark - temp files
+
+- (void)cleanTempFile:(NSString *)path
+{
+  id<MediaPickerProbe> module = [[NSClassFromString(@"MediaPicker") alloc] init];
+  [module cleanTempFiles:path resolve:^(id r) {} reject:^(NSString *a, NSString *b, NSError *e) {}];
+}
+
+- (NSString *)writeFileAt:(NSString *)path
+{
+  [[NSFileManager defaultManager] createDirectoryAtPath:path.stringByDeletingLastPathComponent
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+  XCTAssertTrue([@"x" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+  return path;
+}
+
+- (void)testCleaningOneTempFileDeletesIt
+{
+  NSString *ours = [self writeFileAt:[NSTemporaryDirectory()
+      stringByAppendingPathComponent:@"rn_media_picker/ours.jpg"]];
+
+  [self cleanTempFile:[@"file://" stringByAppendingString:ours]];
+
+  XCTAssertFalse([[NSFileManager defaultManager] fileExistsAtPath:ours]);
+}
+
+- (void)testAPathThatClimbsOutOfTheTempDirIsLeftAlone
+{
+  NSString *victim = [self writeFileAt:[NSTemporaryDirectory()
+      stringByAppendingPathComponent:@"keep-me.txt"]];
+
+  [self cleanTempFile:[NSTemporaryDirectory()
+      stringByAppendingPathComponent:@"rn_media_picker/../keep-me.txt"]];
+
+  XCTAssertTrue([[NSFileManager defaultManager] fileExistsAtPath:victim]);
+  [[NSFileManager defaultManager] removeItemAtPath:victim error:nil];
+}
+
+- (void)testASiblingDirectoryWithTheSamePrefixIsLeftAlone
+{
+  NSString *victim = [self writeFileAt:[NSTemporaryDirectory()
+      stringByAppendingPathComponent:@"rn_media_picker2/keep-me.txt"]];
+
+  [self cleanTempFile:victim];
+
+  XCTAssertTrue([[NSFileManager defaultManager] fileExistsAtPath:victim]);
+  [[NSFileManager defaultManager] removeItemAtPath:victim.stringByDeletingLastPathComponent error:nil];
+}
+
+#pragma mark - crop sizing
+
+- (Class<MPKCropperProbe>)cropper
+{
+  Class cropper = NSClassFromString(@"MPKCropper");
+  XCTAssertNotNil(cropper, @"MPKCropper is not linked into the host app");
+  return cropper;
+}
+
+/// An aspect-locked crop with a size is resized to exactly that size, as on
+/// Android, whatever the crop the user drew.
+- (void)testALockedCropIsResizedExactly
+{
+  UIImage *out = [[self cropper] outputForCrop:[self imageOfSize:CGSizeMake(2000, 1000)]
+                                       options:@{@"cropWidth": @500, @"cropHeight": @500}];
+  XCTAssertEqual(out.size.width * out.scale, 500);
+  XCTAssertEqual(out.size.height * out.scale, 500);
+}
+
+/// A free-style crop fits inside the size instead, so it is never stretched.
+- (void)testAFreeStyleCropFitsInsideWithoutStretching
+{
+  UIImage *out = [[self cropper] outputForCrop:[self imageOfSize:CGSizeMake(2000, 1000)]
+                                       options:@{@"cropWidth": @500, @"cropHeight": @500,
+                                                 @"freeStyleCropEnabled": @YES}];
+  XCTAssertEqual(out.size.width * out.scale, 500);
+  XCTAssertEqual(out.size.height * out.scale, 250);
+}
+
+- (void)testACropWithoutASizeIsLeftAtTheSizeDrawn
+{
+  UIImage *image = [self imageOfSize:CGSizeMake(640, 480)];
+  XCTAssertEqual([[self cropper] outputForCrop:image options:@{}], image);
+}
+
+#pragma mark - image processing
+
+- (NSString *)writePNGOfSize:(CGSize)size
+{
+  NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"rn_media_picker/%@.png", [NSUUID UUID].UUIDString]];
+  [[NSFileManager defaultManager] createDirectoryAtPath:path.stringByDeletingLastPathComponent
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+  XCTAssertTrue([UIImagePNGRepresentation([self imageOfSize:size]) writeToFile:path atomically:YES]);
+  return path;
+}
+
+- (void)testAPngIsReencodedAsJpegByDefault
+{
+  Class<MPKImageProcessingProbe> processing = NSClassFromString(@"MPKImageProcessing");
+  NSString *png = [self writePNGOfSize:CGSizeMake(300, 200)];
+  NSString *mime = @"image/png";
+
+  NSString *out = [processing processImageAtPath:png options:@{} mime:&mime];
+
+  XCTAssertEqualObjects(out.pathExtension, @"jpg");
+  XCTAssertEqualObjects(mime, @"image/jpeg");
+  XCTAssertFalse([[NSFileManager defaultManager] fileExistsAtPath:png],
+                 @"the replaced PNG was left behind");
+}
+
+- (void)testAPngIsLeftAloneWhenForceJpgIsOff
+{
+  Class<MPKImageProcessingProbe> processing = NSClassFromString(@"MPKImageProcessing");
+  NSString *png = [self writePNGOfSize:CGSizeMake(300, 200)];
+  NSString *mime = @"image/png";
+
+  NSString *out = [processing processImageAtPath:png options:@{@"forceJpg": @NO} mime:&mime];
+
+  XCTAssertEqualObjects(out, png);
+  XCTAssertEqualObjects(mime, @"image/png");
+}
+
+#pragma mark - result shape
+
+/// `deselected` only belongs to a pick that sent `preselected`; JS fills in an
+/// empty one for every other call.
+- (void)testDeselectedIsOnlyReportedWhenThereIsOne
+{
+  Class<MPKResultsProbe> results = NSClassFromString(@"MPKResults");
+
+  XCTAssertNil([results successWithAssets:@[] deselected:nil][@"deselected"]);
+  XCTAssertEqualObjects([results successWithAssets:@[] deselected:@[@"a"]][@"deselected"], @[@"a"]);
 }
 
 @end

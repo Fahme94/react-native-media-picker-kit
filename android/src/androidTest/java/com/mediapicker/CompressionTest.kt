@@ -37,7 +37,7 @@ class CompressionTest {
   private val context: Context = ApplicationProvider.getApplicationContext()
 
   @After
-  fun clearCache() = MediaUtils.deleteTemp(context, "")
+  fun clearCache() = MediaFiles.deleteTemp(context, "")
 
   // --- fixtures -----------------------------------------------------------
 
@@ -57,7 +57,7 @@ class CompressionTest {
         block++
       }
     }
-    val file = MediaUtils.newCacheFile(context, "jpg")
+    val file = MediaFiles.newCacheFile(context, "jpg")
     FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 100, it) }
     bitmap.recycle()
     return file
@@ -92,7 +92,7 @@ class CompressionTest {
   }
 
   private fun writeTestVideo(width: Int, height: Int, frames: Int, fps: Int): File {
-    val target = MediaUtils.newCacheFile(context, "mp4")
+    val target = MediaFiles.newCacheFile(context, "mp4")
     val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
       setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
       setInteger(MediaFormat.KEY_BIT_RATE, 6_000_000)
@@ -161,7 +161,7 @@ class CompressionTest {
     val source = writeTestImage(3000, 2000)
     assertTrue("fixture is already under budget, so this proves nothing", source.length() > budget)
 
-    val out = MediaUtils.compressImage(context, source, "image/jpeg", budget)
+    val out = ImageProcessing.compressImage(context, source, "image/jpeg", budget)
     assertTrue("image is over maxImageFileSize: ${out.length()}", out.length() <= budget)
 
     // Still a real decodable image, not a truncated file that merely fits.
@@ -174,15 +174,15 @@ class CompressionTest {
   @Test
   fun imageKeepsResolutionWhenQualityAloneSuffices() {
     val source = writeTestImage(1200, 900)
-    val out = MediaUtils.compressImage(context, source, "image/jpeg", 200L * 1024)
+    val out = ImageProcessing.compressImage(context, source, "image/jpeg", 200L * 1024)
     assertTrue(out.length() <= 200L * 1024)
-    assertEquals(1200 to 900, MediaUtils.imageDimensions(out))
+    assertEquals(1200 to 900, ImageProcessing.imageDimensions(out))
   }
 
   @Test
   fun imageAlreadyUnderBudgetIsUntouched() {
     val source = writeTestImage(400, 300)
-    val out = MediaUtils.compressImage(context, source, "image/jpeg", 8L * 1024 * 1024)
+    val out = ImageProcessing.compressImage(context, source, "image/jpeg", 8L * 1024 * 1024)
     assertEquals("an under-budget image should be returned as-is", source.absolutePath, out.absolutePath)
   }
 
@@ -197,16 +197,16 @@ class CompressionTest {
       setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_ROTATE_90.toString())
       saveAttributes()
     }
-    assertEquals(1200 to 1600, MediaUtils.imageDimensions(source))
+    assertEquals(1200 to 1600, ImageProcessing.imageDimensions(source))
 
-    val out = MediaUtils.processImage(context, source, "image/jpeg", 800, 800, 0.8, false)
-    assertEquals(600 to 800, MediaUtils.imageDimensions(out))
+    val out = ImageProcessing.processImage(context, source, "image/jpeg", 800, 800, 0.8, false)
+    assertEquals(600 to 800, ImageProcessing.imageDimensions(out))
   }
 
   @Test(expected = IllegalStateException::class)
   fun unreachableImageBudgetThrows() {
     // Below what a JPEG header costs, so even the 64px floor cannot reach it.
-    MediaUtils.compressImage(context, writeTestImage(3000, 2000), "image/jpeg", 200L)
+    ImageProcessing.compressImage(context, writeTestImage(3000, 2000), "image/jpeg", 200L)
   }
 
   // --- video --------------------------------------------------------------
@@ -224,12 +224,12 @@ class CompressionTest {
     val budget = sourceBytes / 4
     assertTrue("fixture is already under budget, so this proves nothing", sourceBytes > budget)
 
-    val out = MediaUtils.compressVideo(context, source, budget)
+    val out = VideoProcessing.compressVideo(context, source, budget)
     assertTrue("video is over maxVideoFileSize: ${out.length()}", out.length() <= budget)
     assertTrue("nothing was actually compressed", out.length() < sourceBytes)
 
     // Still a playable clip of the same length, not a truncated one that fits.
-    val meta = MediaUtils.videoMeta(out)
+    val meta = VideoProcessing.videoMeta(out)
     assertTrue("no video dimensions survived", meta.width > 0 && meta.height > 0)
     assertTrue(
       "the clip was truncated instead of compressed: ${meta.durationMs}ms",
@@ -248,14 +248,14 @@ class CompressionTest {
 
     // The progress callback is the only hook that fires while the encoder is
     // actually running, which is exactly where a real cancel would arrive.
-    val out = MediaUtils.compressVideo(context, source, sourceBytes / 4, 0L, cancel) { progress ->
+    val out = VideoProcessing.compressVideo(context, source, sourceBytes / 4, 0L, cancel) { progress ->
       if (progress > 0.1) cancel.cancel()
     }
 
     assertEquals("a cancel should hand back the original", source.absolutePath, out.absolutePath)
     assertEquals("the original was modified", sourceBytes, out.length())
 
-    val strays = MediaUtils.cacheDir(context).listFiles()
+    val strays = MediaFiles.cacheDir(context).listFiles()
       ?.filter { it.absolutePath != source.absolutePath }
       ?.map { it.name } ?: emptyList()
     assertTrue("a partial transcode was left in the cache: $strays", strays.isEmpty())
@@ -265,7 +265,7 @@ class CompressionTest {
   fun cancellingBeforeItStartsSkipsTheWorkEntirely() {
     val cancel = CancellationSignal().apply { cancel() }
     val source = writeTestVideo(320, 240, 30, 30)
-    val out = MediaUtils.compressVideo(context, source, source.length() / 2, 0L, cancel)
+    val out = VideoProcessing.compressVideo(context, source, source.length() / 2, 0L, cancel)
     assertEquals(source.absolutePath, out.absolutePath)
   }
 
@@ -275,7 +275,7 @@ class CompressionTest {
   fun videoCompressionReportsMonotonicProgress() {
     val reported = mutableListOf<Double>()
     val source = writeTestVideo(1280, 720, 90, 30)
-    MediaUtils.compressVideo(context, source, source.length() / 4) { reported.add(it) }
+    VideoProcessing.compressVideo(context, source, source.length() / 4) { reported.add(it) }
 
     assertTrue("no progress was reported at all", reported.isNotEmpty())
     assertTrue("progress left 0..1: $reported", reported.all { it in 0.0..1.0 })
@@ -291,7 +291,7 @@ class CompressionTest {
   @Test(expected = IllegalStateException::class)
   fun unreachableVideoBudgetThrows() {
     // Well below MIN_VIDEO_BITRATE for a three second clip.
-    MediaUtils.compressVideo(context, writeTestVideo(1280, 720, 90, 30), 20L * 1024)
+    VideoProcessing.compressVideo(context, writeTestVideo(1280, 720, 90, 30), 20L * 1024)
   }
 
   /** The point of the floor: a file that IS over its budget is still skipped,
@@ -302,7 +302,7 @@ class CompressionTest {
     val sourceBytes = source.length()
     val budget = sourceBytes / 2 // genuinely over budget
 
-    val out = MediaUtils.compressVideo(context, source, budget, minBytes = sourceBytes * 2)
+    val out = VideoProcessing.compressVideo(context, source, budget, minBytes = sourceBytes * 2)
 
     assertEquals("the floor should have skipped it", source.absolutePath, out.absolutePath)
     assertEquals("the file was modified", sourceBytes, out.length())
@@ -315,7 +315,7 @@ class CompressionTest {
     val sourceBytes = source.length()
     val budget = sourceBytes / 2
 
-    val out = MediaUtils.compressImage(context, source, "image/jpeg", budget, sourceBytes * 2)
+    val out = ImageProcessing.compressImage(context, source, "image/jpeg", budget, sourceBytes * 2)
 
     assertEquals("the floor should have skipped it", source.absolutePath, out.absolutePath)
     assertTrue("this only means anything if it was over budget", out.length() > budget)
@@ -326,14 +326,14 @@ class CompressionTest {
   fun floorBelowTheFileDoesNotBlockCompression() {
     val source = writeTestImage(3000, 2000)
     val budget = 40L * 1024
-    val out = MediaUtils.compressImage(context, source, "image/jpeg", budget, minBytes = 1024)
+    val out = ImageProcessing.compressImage(context, source, "image/jpeg", budget, minBytes = 1024)
     assertTrue("the floor wrongly skipped a file it should have compressed", out.length() <= budget)
   }
 
   @Test
   fun videoAlreadyUnderBudgetIsUntouched() {
     val source = writeTestVideo(320, 240, 30, 30)
-    val out = MediaUtils.compressVideo(context, source, 50L * 1024 * 1024)
+    val out = VideoProcessing.compressVideo(context, source, 50L * 1024 * 1024)
     assertEquals("an under-budget video should be returned as-is", source.absolutePath, out.absolutePath)
   }
 }

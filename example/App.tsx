@@ -1,9 +1,8 @@
 import React, {useEffect, useState} from 'react';
 import {
-  Platform,
+  Image,
   SafeAreaView,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -15,6 +14,7 @@ import {
   CameraType,
   cleanTempFiles,
   compressMedia,
+  cropImage,
   MediaType,
   pickMedia,
   type Asset,
@@ -175,6 +175,14 @@ export default function App() {
   const [progress, setProgress] = useState('');
   // What 'Keep picking' holds between presses, like an attachment list.
   const [held, setHeld] = useState<Asset[]>([]);
+  // Thumbnails of the images the last call returned, so a result can be seen
+  // and not only read.
+  const [previews, setPreviews] = useState<string[]>([]);
+
+  const show = (assets: Asset[]) =>
+    setPreviews(
+      assets.flatMap(a => (a.uri && a.type?.startsWith('image/') ? [a.uri] : [])),
+    );
 
   // Video compression is the slow part, so this is what a real app would drive
   // a progress bar from.
@@ -205,6 +213,7 @@ export default function App() {
     compress?: boolean,
   ) => {
     setLog(`${label}: running…`);
+    setPreviews([]);
 
     if (compress) {
       // Two steps on purpose: pick at full size, then compress the file on
@@ -217,6 +226,7 @@ export default function App() {
       }
       setLog(`${label}: compressing ${source.fileSize} bytes…`);
       const result = await compressMedia(source.uri, options);
+      show(result.assets);
       setLog(
         `${label}\nbefore: ${source.fileSize} bytes\n` +
           `${JSON.stringify(result, summarize, 2)}`,
@@ -227,6 +237,24 @@ export default function App() {
     const result: PickerResult = capture
       ? await captureMedia(options)
       : await pickMedia(options);
+    show(result.assets);
+    setLog(`${label}\n${JSON.stringify(result, summarize, 2)}`);
+  };
+
+  // cropImage on its own, on a file already on disk: the path an app takes to
+  // let the user re-crop something it picked earlier.
+  const pickThenCrop = async () => {
+    const label = 'Pick → cropImage 300×300';
+    setLog(`${label}: running…`);
+    setPreviews([]);
+    const picked = await pickMedia({mediaType: MediaType.photo});
+    const source = picked.assets[0];
+    if (!source?.uri) {
+      setLog(`${label}\n${JSON.stringify(picked, summarize, 2)}`);
+      return;
+    }
+    const result = await cropImage(source.uri, {cropWidth: 300, cropHeight: 300});
+    show(result.assets);
     setLog(`${label}\n${JSON.stringify(result, summarize, 2)}`);
   };
 
@@ -248,6 +276,7 @@ export default function App() {
       );
       setHeld([...held.filter(a => !dropped.includes(a)), ...result.assets]);
     }
+    show(result.assets);
     setLog(
       `Keep picking: holding ${held.length} before this pick\n` +
         JSON.stringify(result, summarize, 2),
@@ -265,6 +294,9 @@ export default function App() {
             <Text style={styles.buttonText}>{label}</Text>
           </TouchableOpacity>
         ))}
+        <TouchableOpacity style={styles.button} onPress={pickThenCrop}>
+          <Text style={styles.buttonText}>Pick → cropImage 300×300</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.button} onPress={keepPicking}>
           <Text style={styles.buttonText}>Keep picking ×5 ({held.length})</Text>
         </TouchableOpacity>
@@ -279,6 +311,13 @@ export default function App() {
         </TouchableOpacity>
       </View>
       {progress !== '' && <Text style={styles.progress}>{progress}</Text>}
+      {previews.length > 0 && (
+        <View style={styles.previews}>
+          {previews.map(uri => (
+            <Image key={uri} source={{uri}} style={styles.preview} />
+          ))}
+        </View>
+      )}
       <ScrollView style={styles.logBox}>
         <Text style={styles.log}>{log}</Text>
       </ScrollView>
@@ -287,13 +326,8 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  // SafeAreaView only insets on iOS; without this the buttons sit under the
-  // Android status bar, which swallows the taps.
-  root: {
-    flex: 1,
-    backgroundColor: '#fff',
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0,
-  },
+  // SafeAreaView only insets on iOS; MainActivity pads for the Android bars.
+  root: {flex: 1, backgroundColor: '#fff'},
   buttons: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, padding: 12},
   button: {
     backgroundColor: '#424242',
@@ -304,6 +338,8 @@ const styles = StyleSheet.create({
   capture: {backgroundColor: '#1b5e20'},
   buttonText: {color: '#fff', fontWeight: '600'},
   progress: {marginHorizontal: 12, fontWeight: '600', color: '#1b5e20'},
+  previews: {flexDirection: 'row', gap: 8, marginHorizontal: 12},
+  preview: {width: 96, height: 96, borderRadius: 6, backgroundColor: '#ddd'},
   logBox: {flex: 1, margin: 12, backgroundColor: '#f2f2f2', borderRadius: 6},
   log: {fontFamily: 'Courier', fontSize: 11, padding: 10},
 });
