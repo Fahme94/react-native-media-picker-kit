@@ -4,6 +4,8 @@ A screen that lets the user add photos in several rounds wants the gallery to op
 already picked still ticked. Without that, the system picker opens blank every time, so the user
 cannot see what they have, and picking the same photo again adds it twice.
 
+<img src="media/preselected-ios.gif" width="240" alt="Reopening the picker with earlier picks still ticked on iOS" />
+
 Pass the `originalPath` of every asset you already hold as `preselected`:
 
 ```ts

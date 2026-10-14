@@ -94,6 +94,39 @@ xcodebuild test -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExa
   `UIImagePickerController` produces, which runs the real temp-file write, asset builder and crop hand-off.
   They also cover crop sizing, image processing, the call slot and temp-file safety.
 
+## Recording the docs GIFs
+
+The GIFs in `docs/media/` are recorded from the example app and converted with
+`scripts/mp4-to-gif.swift`, which needs nothing beyond Xcode's command line tools.
+
+**iOS**, from a UI test, so the taps are the same every time. `TEST_RUNNER_UI_TEST_HOLD` keeps the result
+on screen for that many seconds after the test, long enough to show up in the recording:
+
+```bash
+xcrun simctl io booted recordVideo --codec h264 --force pick.mp4 &
+TEST_RUNNER_UI_TEST_HOLD=4 xcodebuild test -workspace example/ios/MediaPickerExample.xcworkspace \
+  -scheme MediaPickerExample -configuration Release -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -only-testing:MediaPickerExampleUITests/PickerUITests/test1PickPhoto
+kill -INT %1
+```
+
+**Android**, on an emulator with the release APK installed, driving it by hand or with `adb shell input`.
+Record at half the screen size, or `screenrecord` falls back to a size that adds black bars:
+
+```bash
+adb shell screenrecord --size 672x1496 /sdcard/camera.mp4   # Ctrl+C to stop
+adb pull /sdcard/camera.mp4
+```
+
+Then trim and convert. `--from`/`--to` cut away the launch, `--speed` shortens a slow flow, and `--hold`
+keeps the last frame up when the result appears just before the recording ends:
+
+```bash
+swift scripts/mp4-to-gif.swift pick.mp4 docs/media/pick-ios.gif --from 9.5 --to 18
+```
+
+Keep each GIF under about 1 MB: 300 px wide at 8 frames a second does that for a 15 second flow.
+
 ## Running the example
 
 `example/` is a React Native CLI app that links the package and builds on both platforms.

@@ -15,7 +15,15 @@ final class PickerUITests: XCTestCase {
     // TurboModule resolved and a native round trip came back.
     XCTAssertTrue(resultText(containing: "native round trip OK", timeout: 60) != nil,
                   "module did not load")
+  }
 
+  /// Recording the docs GIFs sets UI_TEST_HOLD (seconds) so the result stays on
+  /// screen long enough to see; xcodebuild passes it on from
+  /// TEST_RUNNER_UI_TEST_HOLD. Ordinary runs leave it unset.
+  override func tearDownWithError() throws {
+    if let hold = ProcessInfo.processInfo.environment["UI_TEST_HOLD"].flatMap(UInt32.init) {
+      sleep(hold)
+    }
   }
 
   // MARK: - helpers
@@ -128,6 +136,21 @@ final class PickerUITests: XCTestCase {
     let json = resultText(containing: "\"didCancel\"", timeout: 45)
     report("multi", json)
     XCTAssertNotNil(json)
+  }
+
+  /// The budget is checked on the bytes that reach JS, after the pick.
+  func test10PickUnderABudget() throws {
+    tap("Photo ≤500KB")
+    tapPickerCell(0)
+    let json = nextResult(after: nil, containing: "fileSize")
+    report("budget", json)
+    guard let text = json, let start = text.firstIndex(of: "{"),
+          let data = String(text[start...]).data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let asset = (object["assets"] as? [[String: Any]])?.first,
+          let size = asset["fileSize"] as? Int
+    else { return XCTFail("no asset in \(json ?? "<none>")") }
+    XCTAssertLessThanOrEqual(size, 500 * 1024, "over budget")
   }
 
   /// PHPicker loads a multi-selection concurrently, so this proves the assets
