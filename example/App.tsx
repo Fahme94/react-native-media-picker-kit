@@ -1,10 +1,8 @@
 import React, {useEffect, useState} from 'react';
 import {
   Image,
-  Platform,
   SafeAreaView,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -328,13 +326,8 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  // SafeAreaView only insets on iOS; without this the buttons sit under the
-  // Android status bar, which swallows the taps.
-  root: {
-    flex: 1,
-    backgroundColor: '#fff',
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0,
-  },
+  // SafeAreaView only insets on iOS; MainActivity pads for the Android bars.
+  root: {flex: 1, backgroundColor: '#fff'},
   buttons: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, padding: 12},
   button: {
     backgroundColor: '#424242',

@@ -69,6 +69,9 @@ jobs:
           api-level: 34
           target: google_apis
           arch: x86_64
+          # Without a profile the AVD is 320x640, too small for the example
+          # app's buttons and its result view to share the screen.
+          profile: pixel_6
           disable-animations: true
           working-directory: example/android
           # The test reports carry no logcat, so keep the device log alongside them.
