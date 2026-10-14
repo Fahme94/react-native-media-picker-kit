@@ -71,7 +71,10 @@ jobs:
           arch: x86_64
           disable-animations: true
           working-directory: example/android
+          # The test reports carry no logcat, so keep the device log alongside them.
           script: |
+            adb logcat -c
+            adb logcat -v threadtime > logcat.txt 2>&1 &
             ./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest
             ./gradlew :app:connectedReleaseAndroidTest
       - name: Upload test reports
@@ -82,6 +85,7 @@ jobs:
           path: |
             android/build/reports/androidTests
             example/android/app/build/reports/androidTests
+            example/android/logcat.txt
 
   ios:
     name: iOS capture and UI tests
@@ -104,6 +108,14 @@ jobs:
           path: example/ios/Pods
           key: pods-${{ runner.os }}-${{ hashFiles('example/ios/Podfile.lock') }}
       - run: pod install
+        working-directory: example/ios
+      # Some runners come up without the default Xcode's simulator runtime, so
+      # no simulator exists to test on. Download it only when that happens.
+      - name: Make sure the simulator exists
+        run: |
+          if ! xcodebuild -showdestinations -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample | grep -q 'name:iPhone 16 Pro }'; then
+            xcodebuild -downloadPlatform iOS
+          fi
         working-directory: example/ios
       # The capture tests drive the native delegates with media they generate
       # themselves, so they need nothing but the simulator.

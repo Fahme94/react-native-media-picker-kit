@@ -20,6 +20,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.BeforeClass
@@ -90,10 +91,11 @@ class PickerUiTest {
   fun waitForModule() {
     // The app renders this only after a native round trip came back, so the
     // TurboModule is known to be loaded before any test taps a button.
-    assertNotNull(
-      "module did not load",
-      device.wait(Until.findObject(By.textContains("native round trip OK")), 60_000)
-    )
+    if (device.wait(Until.findObject(By.textContains("native round trip OK")), 60_000) != null) return
+    // Say what was on screen instead, so a CI failure tells a crash or a dialog
+    // in front of the app apart from a round trip that rejected or never rendered.
+    val roundTrip = device.findObject(By.textContains("round trip"))?.text ?: "not rendered"
+    fail("module did not load; foreground: ${device.currentPackageName}, round trip: $roundTrip")
   }
 
   // --- helpers ------------------------------------------------------------

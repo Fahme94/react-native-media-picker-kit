@@ -144,10 +144,7 @@ final class PickerUITests: XCTestCase {
     tapPickerCell(0)
     let json = nextResult(after: nil, containing: "fileSize")
     report("budget", json)
-    guard let text = json, let start = text.firstIndex(of: "{"),
-          let data = String(text[start...]).data(using: .utf8),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let asset = (object["assets"] as? [[String: Any]])?.first,
+    guard let asset = (resultObject(in: json)?["assets"] as? [[String: Any]])?.first,
           let size = asset["fileSize"] as? Int
     else { return XCTFail("no asset in \(json ?? "<none>")") }
     XCTAssertLessThanOrEqual(size, 500 * 1024, "over budget")
@@ -166,10 +163,7 @@ final class PickerUITests: XCTestCase {
 
     let json = nextResult(after: nil, containing: "cropRect")
     report("crop-image", json)
-    guard let text = json, let start = text.firstIndex(of: "{"),
-          let data = String(text[start...]).data(using: .utf8),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let asset = (object["assets"] as? [[String: Any]])?.first
+    guard let asset = (resultObject(in: json)?["assets"] as? [[String: Any]])?.first
     else { return XCTFail("no asset in \(json ?? "<none>")") }
     XCTAssertEqual(asset["width"] as? Int, 300)
     XCTAssertEqual(asset["height"] as? Int, 300)
@@ -216,12 +210,19 @@ final class PickerUITests: XCTestCase {
     return nil
   }
 
+  /// The result JSON inside a matched label. When the match is the container
+  /// rather than the log text, its label also carries every button label before
+  /// the JSON and the scroll bars' descriptions after it, so cut from the first
+  /// brace to the last.
+  private func resultObject(in text: String?) -> [String: Any]? {
+    guard let text, let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+          start < end
+    else { return nil }
+    return try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any]
+  }
+
   private func originalPaths(in text: String?) -> [String] {
-    guard let text, let start = text.firstIndex(of: "{"),
-          let data = String(text[start...]).data(using: .utf8),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let assets = object["assets"] as? [[String: Any]]
-    else { return [] }
+    guard let assets = resultObject(in: text)?["assets"] as? [[String: Any]] else { return [] }
     return assets.compactMap { $0["originalPath"] as? String }
   }
 
@@ -251,9 +252,7 @@ final class PickerUITests: XCTestCase {
     let second = resultText(containing: "holding 2 before", timeout: 45)
     report("preselect-second", second)
     XCTAssertNotNil(second)
-    let json = try XCTUnwrap(second?.components(separatedBy: "\n").dropFirst().joined(separator: "\n"))
-    let result = try XCTUnwrap(
-      JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    let result = try XCTUnwrap(resultObject(in: second), "no result JSON in \(second ?? "<none>")")
     XCTAssertEqual((result["assets"] as? [Any])?.count, 1, "only the new pick should come back")
     XCTAssertEqual((result["deselected"] as? [Any])?.count, 1, "the unticked pick should be deselected")
     XCTAssertTrue(control("Keep picking ×5 (2)").waitForExistence(timeout: 10),
@@ -265,22 +264,48 @@ final class PickerUITests: XCTestCase {
   /// So a simulator can prove that captureMedia opens the camera in the right
   /// mode and clears the permission gate, and nothing beyond that. The delegate
   /// path (temp file, asset build, crop hand-off) needs a physical device.
-  private func assertCameraPresented(mode: String) {
+  private func assertCameraPresented(mode: String) throws {
+    try waitForCamera()
+    // Older camera UIs show a mode switcher; newer ones drop it when only one
+    // mode is allowed, and the PhotoCapture shutter already says which one.
+    let modeButton = app.buttons["Camera Mode"]
+    if modeButton.exists {
+      XCTAssertEqual(modeButton.value as? String, mode, "camera opened in the wrong mode")
+    }
+    dismissCamera()
+  }
+
+  /// Older camera UIs give the close control an identifier; newer ones show a
+  /// plain Cancel button.
+  private func dismissCamera() {
+    let dismiss = app.buttons["DismissImagePickerButton"]
+    (dismiss.exists ? dismiss : app.buttons["Cancel"]).tap()
+  }
+
+  /// Clears the permission prompt and waits for the shutter. A simulator on a
+  /// host with no camera at all (a CI runner) reports the camera source as
+  /// unavailable, and captureMedia rightly resolves camera_unavailable instead,
+  /// so there is nothing to drive: skip, as the Android tests do.
+  @discardableResult
+  private func waitForCamera() throws -> XCUIElement {
     let allow = app.alerts.buttons["OK"]
     if allow.waitForExistence(timeout: 3) { allow.tap() }
 
     let shutter = app.buttons["PhotoCapture"]
-    XCTAssertTrue(shutter.waitForExistence(timeout: 30),
-                  "captureMedia did not present the camera")
-    let modeButton = app.buttons["Camera Mode"]
-    XCTAssertTrue(modeButton.exists, "camera mode control missing")
-    XCTAssertEqual(modeButton.value as? String, mode, "camera opened in the wrong mode")
-    app.buttons["DismissImagePickerButton"].tap()
+    let deadline = Date().addingTimeInterval(30)
+    while Date() < deadline {
+      if shutter.exists { return shutter }
+      if resultText(containing: "camera_unavailable", timeout: 1) != nil {
+        throw XCTSkip("this simulator has no camera")
+      }
+    }
+    XCTFail("captureMedia did not present the camera")
+    return shutter
   }
 
   func test6CapturePhotoPresentsCamera() throws {
     tap("Shoot photo")
-    assertCameraPresented(mode: "Photo")
+    try assertCameraPresented(mode: "Photo")
     let json = resultText(containing: "didCancel", timeout: 30)
     report("capture-dismiss", json)
     XCTAssertNotNil(json)
@@ -307,18 +332,14 @@ final class PickerUITests: XCTestCase {
   /// what would not pass is the shutter leaving the promise hanging.
   func test8CaptureShutter() throws {
     tap("Shoot photo")
-    let allow = app.alerts.buttons["OK"]
-    if allow.waitForExistence(timeout: 3) { allow.tap() }
-
-    let shutter = app.buttons["PhotoCapture"]
-    XCTAssertTrue(shutter.waitForExistence(timeout: 30), "camera never presented")
+    let shutter = try waitForCamera()
     shutter.tap()
 
     let use = app.buttons["Use Photo"]
     guard use.waitForExistence(timeout: 15) else {
       print("RESULT[capture-shutter]: no review sheet - simulator has no capture pipeline")
       XCTAssertTrue(shutter.exists, "the shutter neither captured nor left the camera up")
-      app.buttons["DismissImagePickerButton"].tap()
+      dismissCamera()
       return
     }
 
