@@ -25,20 +25,31 @@ Recorded from the [example app](example), which has a button for every option.
 
 ## Features
 
-| Feature | Guide |
-|---|---|
-| Pick photos, videos, or both from the gallery, with **no runtime permission** on either platform | [Picking](docs/picking.md) |
-| Take a photo or record a video, with nothing to declare on Android | [Camera](docs/camera.md) |
-| Crop after a pick or a shot, without adding another library | [Cropping](docs/cropping.md) |
-| Compress images and video to a size your backend accepts, with progress and cancel. Nothing under 10 MB is compressed unless you lower `minimumFileSizeForCompress` | [Compression](docs/compression.md) |
-| Reopen the gallery with earlier picks still ticked, and learn which ones the user unticked | [Keeping earlier picks selected](docs/preselection.md) |
-| Resize and re-encode on the native side (`maxWidth`, `maxHeight`, `quality`, `forceJpg`) | [Picking](docs/picking.md#resize-and-re-encode-on-the-way-out) |
-| EXIF, base64, and the asset's library id | [Metadata](docs/metadata.md) |
-| Every asset is a real `file://` in the app's cache, never a `content://` URI, with an API to clean up | [Temp files](docs/temp-files.md) |
-| Expo config plugin that writes the iOS keys for you | [Expo](docs/expo.md) |
-| Fully typed, and **nothing ever throws**: a cancel is a result, not an error | [API reference](docs/api.md) |
+| Feature | iOS | Android | Guide |
+|---|:---:|:---:|---|
+| Pick photos, videos, or both, with **no runtime permission** | ✓ | ✓ | [Picking](docs/picking.md) |
+| Pick several at once, in the order tapped | ✓ | ✓ | [Picking](docs/picking.md) |
+| Take a photo | ✓ | ✓ | [Camera](docs/camera.md) |
+| Record a video | ✓ | ✓ | [Camera](docs/camera.md) |
+| Choose the front camera | ✓ | Hint<sup>1</sup> | [Camera](docs/camera.md#options) |
+| Crop after a pick or a shot, no extra library | ✓ | ✓ | [Cropping](docs/cropping.md) |
+| Resize and re-encode (`maxWidth`, `maxHeight`, `quality`, `forceJpg`) | ✓ | ✓ | [Picking](docs/picking.md#resize-and-re-encode-on-the-way-out) |
+| Compress images and video to a file size<sup>2</sup> | ✓ | ✓ | [Compression](docs/compression.md) |
+| Video compression progress and cancel | ✓ | ✓ | [Compression](docs/compression.md) |
+| Reopen the gallery with earlier picks ticked | ✓ | Android 16<sup>3</sup> | [Keeping earlier picks selected](docs/preselection.md) |
+| EXIF | Full | Common tags | [Metadata](docs/metadata.md#includeexif) |
+| Base64 | ✓ | ✓ | [Metadata](docs/metadata.md#includebase64) |
+| Every asset a real `file://`, never `content://`, with cleanup | ✓ | ✓ | [Temp files](docs/temp-files.md) |
+| Expo config plugin | ✓ | Nothing to set | [Expo](docs/expo.md) |
+| Typed, and **never throws**: a cancel is a result | ✓ | ✓ | [API reference](docs/api.md) |
+| Save to the photo library | No | No | Not in 1.0 |
 
-Not in 1.0: saving to the user's photo library. See the [changelog](CHANGELOG.md) for what changed between releases.
+1. Android has no standard way to pick the lens, so the camera app may ignore it.
+2. Nothing under 10 MB is compressed unless you lower `minimumFileSizeForCompress`.
+3. Or any device whose photo picker has SDK extension R-15. Elsewhere the pick still works, without the
+   earlier items ticked.
+
+See the [changelog](CHANGELOG.md) for what changed between releases.
 
 ## Install
 
