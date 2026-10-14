@@ -250,6 +250,20 @@ class PickerUiTest {
   }
 
   @Test
+  fun cropImageCropsAFileAlreadyOnDisk() {
+    tap("Pick → cropImage 300×300")
+    pickCell(0)
+    confirmCrop()
+
+    val asset = nextResult("Pick → cropImage 300×300").onlyAsset()
+    assertFileBacked(asset)
+    assertEquals(300, asset.getInt("width"))
+    assertEquals(300, asset.getInt("height"))
+    assertNotNull("no cropRect: $asset", asset.optJSONObject("cropRect"))
+    assertTrue("originalPath should be the path that was cropped", asset.getString("originalPath").startsWith("file://"))
+  }
+
+  @Test
   fun backingOutOfTheCropperIsACancel() {
     tap("Photo + crop 1:1")
     pickCell(0)

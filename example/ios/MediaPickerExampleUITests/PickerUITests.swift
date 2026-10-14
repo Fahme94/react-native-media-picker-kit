@@ -153,6 +153,30 @@ final class PickerUITests: XCTestCase {
     XCTAssertLessThanOrEqual(size, 500 * 1024, "over budget")
   }
 
+  /// cropImage called on its own, on a file already on disk. It runs on the
+  /// module's queue rather than after a pick, so this is the path that has to
+  /// hop to main itself before presenting the cropper.
+  func test11CropImageOnAFileOnDisk() throws {
+    tap("Pick → cropImage 300×300")
+    tapPickerCell(0)
+
+    let choose = app.buttons["Choose"]
+    XCTAssertTrue(choose.waitForExistence(timeout: 30), "cropper never appeared")
+    choose.tap()
+
+    let json = nextResult(after: nil, containing: "cropRect")
+    report("crop-image", json)
+    guard let text = json, let start = text.firstIndex(of: "{"),
+          let data = String(text[start...]).data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let asset = (object["assets"] as? [[String: Any]])?.first
+    else { return XCTFail("no asset in \(json ?? "<none>")") }
+    XCTAssertEqual(asset["width"] as? Int, 300)
+    XCTAssertEqual(asset["height"] as? Int, 300)
+    XCTAssertTrue((asset["originalPath"] as? String)?.hasPrefix("file://") == true,
+                  "originalPath should be the path that was cropped")
+  }
+
   /// PHPicker loads a multi-selection concurrently, so this proves the assets
   /// still come back in the order the user tapped them. Each cell's identifier is
   /// learned from a single pick first, then the three are multi-picked out of

@@ -25,10 +25,13 @@
 @property (nonatomic, copy, nullable) RCTPromiseResolveBlock pendingResolve;
 @property (nonatomic, strong, nullable) NSDictionary *pendingOptions;
 @property (nonatomic, strong, nullable) NSMutableDictionary *pendingCropAsset;
-/// Raised by cancelCompression and read from the pump queues, so atomic rather
-/// than nonatomic like the rest. Covers a whole batch: cancelling during a
-/// multi-select stops the clip being worked on and everything queued behind it.
-@property (atomic, assign) BOOL compressionCancelled;
+/// One cancel token per batch being compressed, so cancelCompression has
+/// something to cancel. A batch is one call's worth of assets: cancelling during
+/// a multi-select stops the clip being worked on and everything queued behind
+/// it. compressMedia claims no slot and runs alongside a pick's batch, so each
+/// batch owns its token rather than sharing one flag a new call would reset.
+/// Guarded by @synchronized on the set itself.
+@property (nonatomic, strong) NSMutableSet<NSProgress *> *liveCompressions;
 @end
 
 @implementation MediaPicker
@@ -36,6 +39,14 @@
 RCT_EXPORT_MODULE()
 
 + (BOOL)requiresMainQueueSetup { return NO; }
+
+- (instancetype)init
+{
+  if (self = [super init]) {
+    _liveCompressions = [NSMutableSet set];
+  }
+  return self;
+}
 
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
     (const facebook::react::ObjCTurboModule::InitParams &)params
@@ -70,6 +81,25 @@ RCT_EXPORT_MODULE()
   if (resolve) resolve(result);
 }
 
+#pragma mark - Compression batches
+
+/// Registers a batch so cancelCompression can reach it. Pair with endCompression:.
+- (NSProgress *)beginCompression
+{
+  NSProgress *cancel = [NSProgress discreteProgressWithTotalUnitCount:1];
+  @synchronized (self.liveCompressions) {
+    [self.liveCompressions addObject:cancel];
+  }
+  return cancel;
+}
+
+- (void)endCompression:(NSProgress *)cancel
+{
+  @synchronized (self.liveCompressions) {
+    [self.liveCompressions removeObject:cancel];
+  }
+}
+
 - (void)present:(UIViewController *)controller orFailWith:(NSString *)code
 {
   UIViewController *presenter = RCTPresentedViewController();
@@ -86,8 +116,6 @@ RCT_EXPORT_MODULE()
           resolve:(RCTPromiseResolveBlock)resolve
            reject:(RCTPromiseRejectBlock)reject
 {
-  // A cancel belongs to the batch that was running, not to this one.
-  self.compressionCancelled = NO;
   if (![self claim:resolve options:options]) {
     resolve([MPKResults errorWithCode:MPKErrorPickerBusy message:@"A picker is already open"]);
     return;
@@ -104,8 +132,6 @@ RCT_EXPORT_MODULE()
              resolve:(RCTPromiseResolveBlock)resolve
               reject:(RCTPromiseRejectBlock)reject
 {
-  // A cancel belongs to the batch that was running, not to this one.
-  self.compressionCancelled = NO;
   if (![self claim:resolve options:options]) {
     resolve([MPKResults errorWithCode:MPKErrorPickerBusy message:@"A picker is already open"]);
     return;
@@ -127,8 +153,6 @@ RCT_EXPORT_MODULE()
           resolve:(RCTPromiseResolveBlock)resolve
            reject:(RCTPromiseRejectBlock)reject
 {
-  // A cancel belongs to the batch that was running, not to this one.
-  self.compressionCancelled = NO;
   if (![self claim:resolve options:options]) {
     resolve([MPKResults errorWithCode:MPKErrorPickerBusy message:@"A picker is already open"]);
     return;
@@ -146,15 +170,16 @@ RCT_EXPORT_MODULE()
   }
 
   self.pendingCropAsset = [@{@"originalPath": path} mutableCopy];
-  [self presentCropperWithImage:image options:options];
+  // This runs on the module's own queue; UIKit has to be driven from main.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self presentCropperWithImage:image options:options];
+  });
 }
 
 - (void)compressMedia:(NSDictionary *)options
               resolve:(RCTPromiseResolveBlock)resolve
                reject:(RCTPromiseRejectBlock)reject
 {
-  // A cancel belongs to the batch that was running, not to this one.
-  self.compressionCancelled = NO;
   NSString *path = options[@"path"];
   if (path.length == 0) {
     resolve([MPKResults errorWithCode:MPKErrorInvalidOptions message:@"path is required"]);
@@ -181,6 +206,7 @@ RCT_EXPORT_MODULE()
     // Only the byte budget applies. Routing through the picker's asset builders
     // would drag maxWidth/quality/forceJpg along with it, and a file already
     // under budget would then not come back untouched after all.
+    NSProgress *cancel = [self beginCompression];
     NSString *skipped = nil;
     NSString *compressed = [self compressedPathFor:cleanPath
                                               mime:mime
@@ -188,7 +214,9 @@ RCT_EXPORT_MODULE()
                                           progress:^(double p) {
       [self reportProgress:p index:0 total:1];
     }
+                                            cancel:cancel
                                            skipped:&skipped];
+    [self endCompression:cancel];
     if (compressed == nil) {
       resolve([MPKResults errorWithCode:MPKErrorCompressFailed
                                 message:isVideo
@@ -216,8 +244,13 @@ RCT_EXPORT_MODULE()
 - (void)cancelCompression:(RCTPromiseResolveBlock)resolve
                    reject:(RCTPromiseRejectBlock)reject
 {
-  // Safe when nothing is running: the flag is cleared before each batch starts.
-  self.compressionCancelled = YES;
+  // Reaches every batch running now and nothing that starts later, so it is
+  // safe when nothing is running.
+  NSArray<NSProgress *> *running;
+  @synchronized (self.liveCompressions) {
+    running = self.liveCompressions.allObjects;
+  }
+  for (NSProgress *cancel in running) [cancel cancel];
   resolve(nil);
 }
 
@@ -259,6 +292,7 @@ RCT_EXPORT_MODULE()
     dispatch_group_t group = dispatch_group_create();
     __block NSString *failure = nil;
     __block NSString *failureCode = nil;
+    NSProgress *cancel = [self beginCompression];
 
     for (NSUInteger idx = 0; idx < results.count; idx++) {
       dispatch_group_enter(group);
@@ -266,6 +300,7 @@ RCT_EXPORT_MODULE()
                   options:options
                     index:idx
                     total:results.count
+                   cancel:cancel
                completion:^(NSDictionary *asset, NSString *code, NSString *error) {
         @synchronized (slots) {
           if (asset) {
@@ -280,6 +315,7 @@ RCT_EXPORT_MODULE()
     }
 
     dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+    [self endCompression:cancel];
 
     NSMutableArray<NSDictionary *> *assets = [NSMutableArray array];
     for (id slot in slots) {
@@ -312,6 +348,7 @@ RCT_EXPORT_MODULE()
               options:(NSDictionary *)options
                 index:(NSUInteger)index
                 total:(NSUInteger)total
+               cancel:(NSProgress *)cancel
            completion:(void (^)(NSDictionary *asset, NSString *code, NSString *error))completion
 {
   [MPKGalleryPicker copyResult:result
@@ -329,11 +366,13 @@ RCT_EXPORT_MODULE()
                  assetIdentifier:result.assetIdentifier
                            index:index
                            total:total
+                          cancel:cancel
                 compressionError:&compressionError]
         : [self imageAssetAtPath:path
                         fileName:fileName
                          options:options
                  assetIdentifier:result.assetIdentifier
+                          cancel:cancel
                 compressionError:&compressionError];
     if (asset == nil) {
       completion(nil, MPKErrorCompressFailed, compressionError);
@@ -355,74 +394,87 @@ RCT_EXPORT_MODULE()
   UIImage *image = info[UIImagePickerControllerOriginalImage];
 
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    if (mediaURL != nil) {
-      // The recording sits in a system temp file that is not ours to keep, so
-      // copy it into the module's own directory before reporting it.
-      NSString *extension = mediaURL.pathExtension.length > 0 ? mediaURL.pathExtension : @"mov";
-      NSString *destination = [MPKMediaFiles tempPathWithExtension:extension];
-      NSError *copyError = nil;
-      [[NSFileManager defaultManager] copyItemAtPath:mediaURL.path
-                                              toPath:destination
-                                               error:&copyError];
-      if (copyError != nil) {
-        [self finishWith:[MPKResults errorWithCode:MPKErrorCannotProcessAsset
-                                           message:copyError.localizedDescription]];
-        return;
-      }
-      NSString *compressionError = nil;
-      NSDictionary *asset = [self videoAssetAtPath:destination
-                                          fileName:nil
-                                           options:options
-                                   assetIdentifier:nil
-                                             index:0
-                                             total:1
-                                  compressionError:&compressionError];
-      if (asset == nil) {
-        [self finishWith:[MPKResults errorWithCode:MPKErrorCompressFailed message:compressionError]];
-        return;
-      }
-      [self finishWith:[MPKResults successWithAssets:@[asset] deselected:nil]];
-      return;
-    }
+    NSProgress *cancel = [self beginCompression];
+    [self finishCapture:mediaURL image:image options:options cancel:cancel];
+    [self endCompression:cancel];
+  });
+}
 
-    if (image == nil) {
+/// Off the main queue, under the capture's own cancel token.
+- (void)finishCapture:(nullable NSURL *)mediaURL
+                image:(nullable UIImage *)image
+              options:(NSDictionary *)options
+               cancel:(NSProgress *)cancel
+{
+  if (mediaURL != nil) {
+    // The recording sits in a system temp file that is not ours to keep, so
+    // copy it into the module's own directory before reporting it.
+    NSString *extension = mediaURL.pathExtension.length > 0 ? mediaURL.pathExtension : @"mov";
+    NSString *destination = [MPKMediaFiles tempPathWithExtension:extension];
+    NSError *copyError = nil;
+    [[NSFileManager defaultManager] copyItemAtPath:mediaURL.path
+                                            toPath:destination
+                                             error:&copyError];
+    if (copyError != nil) {
       [self finishWith:[MPKResults errorWithCode:MPKErrorCannotProcessAsset
-                                         message:@"The camera returned no media"]];
-      return;
-    }
-
-    if ([options[@"cropping"] boolValue]) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        // Nothing has been written to disk yet, so there is no pre-crop temp
-        // file for the cropper delegate to clean up.
-        self.pendingCropAsset = [NSMutableDictionary dictionary];
-        [self presentCropperWithImage:image options:options];
-      });
-      return;
-    }
-
-    // Write the capture untouched and let the shared image builder apply
-    // maxWidth/maxHeight/quality/forceJpg, so camera and gallery assets go
-    // through exactly the same rules.
-    NSData *data = UIImageJPEGRepresentation(image, 1.0);
-    NSString *path = [MPKMediaFiles tempPathWithExtension:@"jpg"];
-    if (data == nil || ![data writeToFile:path atomically:YES]) {
-      [self finishWith:[MPKResults errorWithCode:MPKErrorCannotProcessAsset
-                                         message:@"Could not write the captured photo"]];
+                                         message:copyError.localizedDescription]];
       return;
     }
     NSString *compressionError = nil;
-    NSDictionary *asset = [self imageAssetAtPath:path
+    NSDictionary *asset = [self videoAssetAtPath:destination
                                         fileName:nil
                                          options:options
                                  assetIdentifier:nil
+                                           index:0
+                                           total:1
+                                          cancel:cancel
                                 compressionError:&compressionError];
     if (asset == nil) {
       [self finishWith:[MPKResults errorWithCode:MPKErrorCompressFailed message:compressionError]];
       return;
     }
     [self finishWith:[MPKResults successWithAssets:@[asset] deselected:nil]];
-  });
+    return;
+  }
+
+  if (image == nil) {
+    [self finishWith:[MPKResults errorWithCode:MPKErrorCannotProcessAsset
+                                       message:@"The camera returned no media"]];
+    return;
+  }
+
+  if ([options[@"cropping"] boolValue]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      // Nothing has been written to disk yet, so there is no pre-crop temp
+      // file for the cropper delegate to clean up.
+      self.pendingCropAsset = [NSMutableDictionary dictionary];
+      [self presentCropperWithImage:image options:options];
+    });
+    return;
+  }
+
+  // Write the capture untouched and let the shared image builder apply
+  // maxWidth/maxHeight/quality/forceJpg, so camera and gallery assets go
+  // through exactly the same rules.
+  NSData *data = UIImageJPEGRepresentation(image, 1.0);
+  NSString *path = [MPKMediaFiles tempPathWithExtension:@"jpg"];
+  if (data == nil || ![data writeToFile:path atomically:YES]) {
+    [self finishWith:[MPKResults errorWithCode:MPKErrorCannotProcessAsset
+                                       message:@"Could not write the captured photo"]];
+    return;
+  }
+  NSString *compressionError = nil;
+  NSDictionary *asset = [self imageAssetAtPath:path
+                                      fileName:nil
+                                       options:options
+                               assetIdentifier:nil
+                                        cancel:cancel
+                              compressionError:&compressionError];
+  if (asset == nil) {
+    [self finishWith:[MPKResults errorWithCode:MPKErrorCompressFailed message:compressionError]];
+    return;
+  }
+  [self finishWith:[MPKResults successWithAssets:@[asset] deselected:nil]];
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker
@@ -437,6 +489,7 @@ RCT_EXPORT_MODULE()
                                    fileName:(nullable NSString *)fileName
                                     options:(NSDictionary *)options
                             assetIdentifier:(nullable NSString *)assetIdentifier
+                                     cancel:(NSProgress *)cancel
                            compressionError:(NSString **)compressionError
 {
   NSString *mime = [MPKMediaFiles mimeTypeForPath:path];
@@ -448,6 +501,7 @@ RCT_EXPORT_MODULE()
                                             mime:mime
                                          options:options
                                         progress:nil
+                                          cancel:cancel
                                          skipped:&skipped];
   if (compressed == nil) {
     *compressionError = @"Could not compress the image below maxImageFileSize";
@@ -474,6 +528,7 @@ RCT_EXPORT_MODULE()
                             assetIdentifier:(nullable NSString *)assetIdentifier
                                       index:(NSUInteger)index
                                       total:(NSUInteger)total
+                                     cancel:(NSProgress *)cancel
                            compressionError:(NSString **)compressionError
 {
   NSString *skipped = nil;
@@ -483,6 +538,7 @@ RCT_EXPORT_MODULE()
                                         progress:^(double p) {
     [self reportProgress:p index:index total:total];
   }
+                                          cancel:cancel
                                          skipped:&skipped];
   if (compressed == nil) {
     *compressionError = @"Could not compress the video below maxVideoFileSize";
@@ -524,6 +580,7 @@ RCT_EXPORT_MODULE()
                                     mime:(NSString *)mime
                                  options:(NSDictionary *)options
                                 progress:(nullable void (^)(double))progress
+                                  cancel:(NSProgress *)cancel
                                  skipped:(NSString *_Nullable *_Nullable)skipped
 {
   BOOL isVideo = [mime hasPrefix:@"video/"];
@@ -532,13 +589,12 @@ RCT_EXPORT_MODULE()
       [options[isVideo ? @"maxVideoFileSize" : @"maxImageFileSize"] unsignedLongLongValue];
   unsigned long long size = [MPKMediaFiles fileSizeAtPath:path];
 
-  __weak MediaPicker *weakSelf = self;
   NSString *result = isVideo
       ? [MPKVideoProcessing compressVideoAtPath:path
                                      toMaxBytes:budget
                                        minBytes:minBytes
                                        progress:progress
-                                    isCancelled:^BOOL { return weakSelf.compressionCancelled; }]
+                                    isCancelled:^BOOL { return cancel.cancelled; }]
       : [MPKImageProcessing compressImageAtPath:path toMaxBytes:budget minBytes:minBytes];
 
   // Unchanged and already inside its budget is the ordinary case; unchanged
@@ -546,7 +602,7 @@ RCT_EXPORT_MODULE()
   // know which, because the file it is about to upload is too big.
   if (skipped != NULL && result != nil && [result isEqualToString:path] &&
       budget > 0 && size > budget) {
-    if (self.compressionCancelled) {
+    if (cancel.cancelled) {
       *skipped = @"cancelled";
     } else if (minBytes > 0 && size < minBytes) {
       *skipped = @"below_minimum";
@@ -591,7 +647,9 @@ RCT_EXPORT_MODULE()
   // Encoding, and now a compression search on top of it, are far too much work
   // for the main thread the cropper calls back on.
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    [self finishCrop:image rect:cropRect options:options pending:pending];
+    NSProgress *cancel = [self beginCompression];
+    [self finishCrop:image rect:cropRect options:options pending:pending cancel:cancel];
+    [self endCompression:cancel];
   });
 }
 
@@ -599,6 +657,7 @@ RCT_EXPORT_MODULE()
               rect:(CGRect)cropRect
            options:(NSDictionary *)options
            pending:(nullable NSMutableDictionary *)pending
+            cancel:(NSProgress *)cancel
 {
   CGFloat quality = options[@"quality"] ? [options[@"quality"] floatValue] : 1.0;
   NSData *data = UIImageJPEGRepresentation([MPKCropper outputForCrop:image options:options], quality);
@@ -628,6 +687,7 @@ RCT_EXPORT_MODULE()
                                             mime:@"image/jpeg"
                                          options:options
                                         progress:nil
+                                          cancel:cancel
                                          skipped:&skipped];
   if (compressed == nil) {
     [self finishWith:[MPKResults errorWithCode:MPKErrorCompressFailed

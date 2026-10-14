@@ -16,6 +16,7 @@ import {
   CameraType,
   cleanTempFiles,
   compressMedia,
+  cropImage,
   MediaType,
   pickMedia,
   type Asset,
@@ -242,6 +243,23 @@ export default function App() {
     setLog(`${label}\n${JSON.stringify(result, summarize, 2)}`);
   };
 
+  // cropImage on its own, on a file already on disk: the path an app takes to
+  // let the user re-crop something it picked earlier.
+  const pickThenCrop = async () => {
+    const label = 'Pick → cropImage 300×300';
+    setLog(`${label}: running…`);
+    setPreviews([]);
+    const picked = await pickMedia({mediaType: MediaType.photo});
+    const source = picked.assets[0];
+    if (!source?.uri) {
+      setLog(`${label}\n${JSON.stringify(picked, summarize, 2)}`);
+      return;
+    }
+    const result = await cropImage(source.uri, {cropWidth: 300, cropHeight: 300});
+    show(result.assets);
+    setLog(`${label}\n${JSON.stringify(result, summarize, 2)}`);
+  };
+
   // Reopens the gallery with everything held still ticked, then applies the
   // result the way an app should: drop what was unticked, append what is new.
   const keepPicking = async () => {
@@ -278,6 +296,9 @@ export default function App() {
             <Text style={styles.buttonText}>{label}</Text>
           </TouchableOpacity>
         ))}
+        <TouchableOpacity style={styles.button} onPress={pickThenCrop}>
+          <Text style={styles.buttonText}>Pick → cropImage 300×300</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.button} onPress={keepPicking}>
           <Text style={styles.buttonText}>Keep picking ×5 ({held.length})</Text>
         </TouchableOpacity>

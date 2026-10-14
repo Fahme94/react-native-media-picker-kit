@@ -26,6 +26,9 @@
                resolve:(void (^)(id))resolve
                 reject:(void (^)(NSString *, NSString *, NSError *))reject;
 - (BOOL)claim:(void (^)(id))resolve options:(NSDictionary *)options;
+- (void)pickMedia:(NSDictionary *)options
+          resolve:(void (^)(id))resolve
+           reject:(void (^)(NSString *, NSString *, NSError *))reject;
 @end
 
 /// The helper classes, reached by name for the same reason as the module.
@@ -61,6 +64,26 @@
   [module setValue:[^(id result) { onResult(result); } copy] forKey:@"pendingResolve"];
   [module setValue:options forKey:@"pendingOptions"];
   return module;
+}
+
+/// Calls cancelCompression once a batch is actually compressing. A cancel
+/// reaches only batches already running, so firing it on a timer races the
+/// capture's own start-up, which on a cold first test is slower than any fixed
+/// delay worth waiting.
+- (void)cancelOnceCompressing:(id<MediaPickerProbe>)module then:(nullable dispatch_block_t)then
+{
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    NSMutableSet *live = [(id)module valueForKey:@"liveCompressions"];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:30];
+    while ([deadline timeIntervalSinceNow] > 0) {
+      NSUInteger running;
+      @synchronized (live) { running = live.count; }
+      if (running > 0) break;
+      usleep(10000);
+    }
+    [module cancelCompression:^(id r) {} reject:^(NSString *a, NSString *b, NSError *e) {}];
+    if (then) then();
+  });
 }
 
 - (UIImage *)imageOfSize:(CGSize)size
@@ -357,12 +380,7 @@
     [done fulfill];
   }];
 
-  // Long enough for the copy to finish and the transcode to be underway, short
-  // enough that it cannot have completed.
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                 dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    [module cancelCompression:^(id r) {} reject:^(NSString *a, NSString *b, NSError *e) {}];
-  });
+  [self cancelOnceCompressing:module then:nil];
 
   [module imagePickerController:[UIImagePickerController new] didFinishPickingMediaWithInfo:@{
     UIImagePickerControllerMediaType: UTTypeMovie.identifier,
@@ -376,6 +394,42 @@
   XCTAssertEqualObjects(asset[@"fileSize"], @(src), @"cancel should hand back the original");
   // Untouched means not transcoded, so it is still the QuickTime copy.
   XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+}
+
+/// A call turned away as busy is not a new batch, so it must not wipe out a
+/// cancel the user just asked for on the batch that is running.
+- (void)testABusyCallDoesNotUndoACancel
+{
+  NSURL *recording = [self writeMovieOfSize:CGSizeMake(1280, 720) frames:300 fps:30];
+  unsigned long long src =
+      [[[NSFileManager defaultManager] attributesOfItemAtPath:recording.path error:nil] fileSize];
+
+  __block NSDictionary *result = nil;
+  __block NSDictionary *busy = nil;
+  XCTestExpectation *done = [self expectationWithDescription:@"capture resolved"];
+  XCTestExpectation *turnedAway = [self expectationWithDescription:@"busy call resolved"];
+  id<MediaPickerProbe> module = [self moduleWithOptions:@{@"maxVideoFileSize": @(src / 4)}
+                                               onResult:^(NSDictionary *r) {
+    result = r;
+    [done fulfill];
+  }];
+
+  [self cancelOnceCompressing:module then:^{
+    [module pickMedia:@{} resolve:^(id r) {
+      busy = r;
+      [turnedAway fulfill];
+    } reject:^(NSString *a, NSString *b, NSError *e) {}];
+  }];
+
+  [module imagePickerController:[UIImagePickerController new] didFinishPickingMediaWithInfo:@{
+    UIImagePickerControllerMediaType: UTTypeMovie.identifier,
+    UIImagePickerControllerMediaURL: recording}];
+  [self waitForExpectations:@[done, turnedAway] timeout:120];
+
+  XCTAssertEqualObjects(busy[@"errorCode"], @"picker_busy");
+  NSDictionary *asset = [self onlyAssetOf:result];
+  XCTAssertEqualObjects(asset[@"compressionSkipped"], @"cancelled",
+                        @"the busy call cleared the cancel and the transcode ran to the end");
 }
 
 /// The point of the floor: a file that IS over its budget is still skipped,
