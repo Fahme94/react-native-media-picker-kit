@@ -1332,7 +1332,7 @@ PODS:
     - React-jsiexecutor
     - React-RCTFBReactNativeSpec
     - ReactCommon/turbomodule/core
-  - react-native-media-picker-kit (0.2.2):
+  - react-native-media-picker-kit (1.0.0):
     - DoubleConversion
     - glog
     - hermes-engine

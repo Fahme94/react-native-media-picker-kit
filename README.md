@@ -38,7 +38,7 @@ Recorded from the [example app](example), which has a button for every option.
 | Expo config plugin that writes the iOS keys for you | [Expo](docs/expo.md) |
 | Fully typed, and **nothing ever throws**: a cancel is a result, not an error | [API reference](docs/api.md) |
 
-Not yet: saving to the user's photo library.
+Not in 1.0: saving to the user's photo library. See the [changelog](CHANGELOG.md) for what changed between releases.
 
 ## Install
 
@@ -56,9 +56,18 @@ npx expo install react-native-media-picker-kit
 npx expo prebuild
 ```
 
-Needs React Native **0.79+** with the New Architecture on (`newArchEnabled=true`), Android
-`minSdkVersion` 24+, iOS 15.1+. There is no legacy-architecture fallback, and Expo Go cannot load it —
-you need a development build. See [Expo](docs/expo.md).
+### Supported versions
+
+| | Minimum | Tested on |
+|---|---|---|
+| React Native | 0.79, New Architecture on (`newArchEnabled=true`) | 0.79 (example app, CI), 0.86 |
+| Expo | SDK 53, development build | SDK 57 |
+| iOS | 15.1 | iOS 18 and 26 simulators |
+| Android | `minSdkVersion` 24 | API 31, 34 (CI) and 36 emulators |
+
+There is no legacy-architecture fallback, and Expo Go cannot load it. See [Expo](docs/expo.md).
+[`preselected`](docs/preselection.md) is the one feature that depends on the OS version: it shows ticks
+only where the system picker supports them.
 
 ## Quick start
 
@@ -128,6 +137,7 @@ Reflects the behaviour these libraries document and that this package was built 
 - [Temp files](docs/temp-files.md): where assets live and how to clean them up.
 - [Troubleshooting](docs/troubleshooting.md): autolinking, older Android, and the Xcode `fmt` build failure.
 - [Example app](example): a runnable project with a button per option.
+- [Changelog](CHANGELOG.md): what changed in each release.
 - [Contributing](CONTRIBUTING.md): code layout, running the tests, and releasing.
 
 [Report a bug](https://github.com/Fahme94/react-native-media-picker/issues)

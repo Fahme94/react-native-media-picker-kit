@@ -211,7 +211,6 @@ body.append('file', {
 | `crop_failed` | The cropper could not encode or write the result. |
 | `compress_failed` | The file could not be brought under `maxImageFileSize` / `maxVideoFileSize`. See [Compression](compression.md). |
 | `picker_busy` | A picker is already open. |
-| `no_library_permission` | Photo library access denied (`includeExtra` on iOS). |
 | `others` | Anything else; read `errorMessage`. |
 
 ## Options
@@ -272,7 +271,7 @@ Set `minimumFileSizeForCompress: 0` to get an unconditional ceiling.
 | --- | --- | --- | --- |
 | `includeBase64` | `boolean` | `false` | Adds `base64` |
 | `includeExif` | `boolean` | `false` | Adds `exif` |
-| `includeExtra` | `boolean` | `false` | Adds `id` and `timestamp`. May require library permission on iOS |
+| `includeExtra` | `boolean` | `false` | Adds `id` and `timestamp` ([details](metadata.md#includeextra)) |
 | `writeTempFile` | `boolean` | `true` | iOS only. See [Temp files](temp-files.md) |
 | `presentationStyle` | `PresentationStyle` | `'currentContext'` | iOS only. `'currentContext'` · `'pageSheet'` · `'fullScreen'` · `'formSheet'` · `'overFullScreen'` |
 

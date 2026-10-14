@@ -29,7 +29,6 @@ export type PresentationStyle =
 
 export type ErrorCode =
   | 'permission'
-  | 'no_library_permission'
   | 'cannot_process_asset'
   | 'crop_failed'
   | 'compress_failed'
@@ -109,7 +108,7 @@ export interface PickerOptions {
 
   includeBase64?: boolean;
   includeExif?: boolean;
-  /** Include `id` and `timestamp`. May require library permission. */
+  /** Include `id` and `timestamp`. Needs no permission. */
   includeExtra?: boolean;
   /** iOS only. Skip writing a temp file when you only need base64. */
   writeTempFile?: boolean;

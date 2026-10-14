@@ -198,11 +198,27 @@ native sources, the podspec and the Expo plugin are published. `src` has to ship
 codegen reads the TurboModule spec out of it when the consuming app builds. `prepare` runs `bob build`,
 which npm invokes before packing, so a stale `lib` can't be published.
 
-```bash
-npm pack --dry-run   # 36 files, no build output, no example app
-npm publish
-git tag "v$(node -p "require('./package.json').version")" && git push --tags
-```
+1. Merge to `main` and wait for CI to pass on all three jobs.
+2. Set `version` in `package.json`, and in `CHANGELOG.md` replace `Unreleased` with the date and point the
+   version's compare link at the new tag.
+3. Point the README's GIFs at `main`. npm shows the README but not `docs/`, so relative image paths break
+   on the package page. Once the GIFs are on `main` the absolute URLs work everywhere, so this only needs
+   doing once:
+
+   ```bash
+   sed -i '' 's|src="docs/media/|src="https://raw.githubusercontent.com/Fahme94/react-native-media-picker/main/docs/media/|' README.md
+   ```
+
+4. Pack, publish and tag:
+
+   ```bash
+   npm pack --dry-run   # 58 files, no build output, no example app, no GIFs
+   npm publish
+   git tag "v$(node -p "require('./package.json').version")" && git push --tags
+   ```
+
+From 1.0.0 the package follows [Semantic Versioning](https://semver.org/): renaming or removing an option,
+a result field or an error code needs a major version. Adding one is a minor version.
 
 The podspec takes its version from `package.json` and its tag from `v<version>`, so tagging that way is what
 lets CocoaPods resolve a release.
