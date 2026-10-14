@@ -128,6 +128,54 @@ final class PickerUITests: XCTestCase {
     XCTAssertNotNil(json)
   }
 
+  /// PHPicker loads a multi-selection concurrently, so this proves the assets
+  /// still come back in the order the user tapped them. Each cell's identifier is
+  /// learned from a single pick first, then the three are multi-picked out of
+  /// grid order.
+  func test5bMultiSelectKeepsPickOrder() throws {
+    var identifiers: [String] = []
+    var previous: String? = nil
+    for cell in 0..<3 {
+      tap("Photo")
+      tapPickerCell(cell)
+      previous = nextResult(after: previous, containing: "originalPath")
+      let paths = originalPaths(in: previous)
+      XCTAssertEqual(paths.count, 1, "single pick of cell \(cell) returned \(paths)")
+      identifiers += paths
+    }
+
+    tap("Photos ×3")
+    for cell in [2, 0, 1] { tapPickerCell(cell) }
+    confirmMultiSelect()
+    let json = nextResult(after: previous, containing: "\"assets\"")
+    report("multi-order", json)
+
+    XCTAssertEqual(originalPaths(in: json),
+                   [identifiers[2], identifiers[0], identifiers[1]],
+                   "assets did not come back in the order they were picked")
+  }
+
+  /// The result view only changes when a call resolves, so wait for text that
+  /// differs from the last result rather than for any result at all.
+  private func nextResult(after previous: String?, containing needle: String) -> String? {
+    let deadline = Date().addingTimeInterval(45)
+    while Date() < deadline {
+      if let text = resultText(containing: needle, timeout: 1), text != previous {
+        return text
+      }
+    }
+    return nil
+  }
+
+  private func originalPaths(in text: String?) -> [String] {
+    guard let text, let start = text.firstIndex(of: "{"),
+          let data = String(text[start...]).data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let assets = object["assets"] as? [[String: Any]]
+    else { return [] }
+    return assets.compactMap { $0["originalPath"] as? String }
+  }
+
   private func confirmMultiSelect() {
     sleep(1)
     let add = app.buttons["Add"].exists ? app.buttons["Add"] : app.buttons["Done"]

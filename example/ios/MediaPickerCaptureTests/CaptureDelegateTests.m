@@ -11,7 +11,7 @@
 /// hand-off on a simulator. What they deliberately do not cover is the camera
 /// itself — that a real shutter calls this delegate at all still needs hardware.
 ///
-/// Only three entry points are needed, so they are declared here and the class
+/// Only a few entry points are needed, so they are declared here and the class
 /// is reached by name; the test target then has no build dependency on the pod.
 @protocol MediaPickerProbe <NSObject>
 - (void)imagePickerController:(UIImagePickerController *)picker
@@ -22,6 +22,10 @@
                      angle:(NSInteger)angle;
 - (void)cancelCompression:(void (^)(id))resolve
                    reject:(void (^)(NSString *, NSString *, NSError *))reject;
+- (void)cleanTempFiles:(NSString *)path
+               resolve:(void (^)(id))resolve
+                reject:(void (^)(NSString *, NSString *, NSError *))reject;
+- (BOOL)claim:(void (^)(id))resolve options:(NSDictionary *)options;
 @end
 
 @interface CaptureDelegateTests : XCTestCase
@@ -492,6 +496,80 @@
   [self assertFileBackedAsset:asset];
   XCTAssertLessThanOrEqual([self sizeOfAsset:asset], budget, @"the cropped image is over budget");
   XCTAssertEqualObjects(asset[@"cropRect"][@"width"], @2000, @"the crop rect must survive compression");
+}
+
+#pragma mark - the call slot
+
+/// Two JS calls racing for the picker: exactly one may hold it, or a second
+/// call's options would overwrite the first one's while it is still open.
+- (void)testExactlyOneOfManySimultaneousCallsGetsTheSlot
+{
+  for (NSInteger round = 0; round < 200; round++) {
+    id<MediaPickerProbe> module = [[NSClassFromString(@"MediaPicker") alloc] init];
+    __block NSInteger winners = 0;
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    for (NSInteger caller = 0; caller < 8; caller++) {
+      dispatch_group_async(group, queue, ^{
+        if ([module claim:^(id r) {} options:@{}]) {
+          @synchronized (self) { winners++; }
+        }
+      });
+    }
+    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+    XCTAssertEqual(winners, 1);
+  }
+}
+
+#pragma mark - temp files
+
+- (void)cleanTempFile:(NSString *)path
+{
+  id<MediaPickerProbe> module = [[NSClassFromString(@"MediaPicker") alloc] init];
+  [module cleanTempFiles:path resolve:^(id r) {} reject:^(NSString *a, NSString *b, NSError *e) {}];
+}
+
+- (NSString *)writeFileAt:(NSString *)path
+{
+  [[NSFileManager defaultManager] createDirectoryAtPath:path.stringByDeletingLastPathComponent
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+  XCTAssertTrue([@"x" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+  return path;
+}
+
+- (void)testCleaningOneTempFileDeletesIt
+{
+  NSString *ours = [self writeFileAt:[NSTemporaryDirectory()
+      stringByAppendingPathComponent:@"rn_media_picker/ours.jpg"]];
+
+  [self cleanTempFile:[@"file://" stringByAppendingString:ours]];
+
+  XCTAssertFalse([[NSFileManager defaultManager] fileExistsAtPath:ours]);
+}
+
+- (void)testAPathThatClimbsOutOfTheTempDirIsLeftAlone
+{
+  NSString *victim = [self writeFileAt:[NSTemporaryDirectory()
+      stringByAppendingPathComponent:@"keep-me.txt"]];
+
+  [self cleanTempFile:[NSTemporaryDirectory()
+      stringByAppendingPathComponent:@"rn_media_picker/../keep-me.txt"]];
+
+  XCTAssertTrue([[NSFileManager defaultManager] fileExistsAtPath:victim]);
+  [[NSFileManager defaultManager] removeItemAtPath:victim error:nil];
+}
+
+- (void)testASiblingDirectoryWithTheSamePrefixIsLeftAlone
+{
+  NSString *victim = [self writeFileAt:[NSTemporaryDirectory()
+      stringByAppendingPathComponent:@"rn_media_picker2/keep-me.txt"]];
+
+  [self cleanTempFile:victim];
+
+  XCTAssertTrue([[NSFileManager defaultManager] fileExistsAtPath:victim]);
+  [[NSFileManager defaultManager] removeItemAtPath:victim.stringByDeletingLastPathComponent error:nil];
 }
 
 @end

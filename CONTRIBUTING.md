@@ -3,6 +3,25 @@
 Everything here is the detail that would clutter the README: why the native side is built the way it is,
 exactly what has been run on a device, and how a release goes out.
 
+## Code layout
+
+Both platforms split the native code the same way, one file per job:
+
+| Job | Android (`android/src/main/java/com/mediapicker/`) | iOS (`ios/`) |
+|---|---|---|
+| JS entry points, the open call, compression orchestration | `MediaPickerModule.kt`, `PendingCall.kt` | `MediaPicker.mm` |
+| Gallery picker | `GalleryPicker.kt` | `MPKGalleryPicker` |
+| Camera | `CameraCapture.kt` | `MPKCameraCapture` |
+| Cropper | `Cropper.kt` | `MPKCropper` |
+| Image resize, re-encode, compression, EXIF | `ImageProcessing.kt` | `MPKImageProcessing` |
+| Video metadata and compression | `VideoProcessing.kt` | `MPKVideoProcessing` |
+| Temp directory, MIME types, cleanup | `MediaFiles.kt` | `MPKMediaFiles` |
+| Result and asset maps, error codes | `Results.kt` | `MPKResults` |
+
+Error codes have one owner per platform (`ErrorCode` in `Results.kt`, `MPKError*` in `MPKResults.h`), and
+both mirror `ErrorCode` in `src/types.ts`. The iOS prefix is `MPK` because Apple's MediaPlayer framework
+already uses `MP`.
+
 ## Design notes
 
 **Codegen uses `UnsafeObject` for options and results** rather than generated structs. Generated structs for
