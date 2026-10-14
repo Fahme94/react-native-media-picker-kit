@@ -109,12 +109,17 @@ jobs:
           key: pods-${{ runner.os }}-${{ hashFiles('example/ios/Podfile.lock') }}
       - run: pod install
         working-directory: example/ios
-      # Some runners come up without the default Xcode's simulator runtime, so
-      # no simulator exists to test on. Download it only when that happens.
+      # Some runners come up with CoreSimulatorService unreachable, so xcodebuild
+      # lists no simulators at all. Restarting the service brings them back.
       - name: Make sure the simulator exists
         run: |
-          if ! xcodebuild -showdestinations -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample | grep -q 'name:iPhone 16 Pro }'; then
-            xcodebuild -downloadPlatform iOS
+          has_simulator() {
+            xcodebuild -showdestinations -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample | grep -q 'name:iPhone 16 Pro }'
+          }
+          if ! has_simulator; then
+            sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService || true
+            xcrun simctl list devices available
+            has_simulator || { echo "::error::iPhone 16 Pro simulator still unavailable"; exit 1; }
           fi
         working-directory: example/ios
       # The capture tests drive the native delegates with media they generate
