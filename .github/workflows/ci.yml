@@ -59,7 +59,11 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Run instrumented tests
+      # Library tests first, then the UI tests, which drive the example app's
+      # release build (JS bundled, so no Metro) through the real photo picker,
+      # cropper and camera. Camera tests skip when the image's camera app does
+      # not label its shutter.
+      - name: Run instrumented and UI tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -67,16 +71,20 @@ jobs:
           arch: x86_64
           disable-animations: true
           working-directory: example/android
-          script: ./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest
-      - name: Upload test report
+          script: |
+            ./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest
+            ./gradlew :app:connectedReleaseAndroidTest
+      - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: android-test-report
-          path: android/build/reports/androidTests
+          name: android-test-reports
+          path: |
+            android/build/reports/androidTests
+            example/android/app/build/reports/androidTests
 
   ios:
-    name: iOS build and capture tests
+    name: iOS capture and UI tests
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -97,9 +105,8 @@ jobs:
           key: pods-${{ runner.os }}-${{ hashFiles('example/ios/Podfile.lock') }}
       - run: pod install
         working-directory: example/ios
-      # Only the capture tests: they drive the native delegates with media they
-      # generate themselves. The picker UI tests need Metro and a photo library,
-      # so they stay a local, pre-release run for now.
+      # The capture tests drive the native delegates with media they generate
+      # themselves, so they need nothing but the simulator.
       - name: Run capture tests
         run: |
           xcodebuild test \
@@ -107,5 +114,18 @@ jobs:
             -scheme MediaPickerExample \
             -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
             -only-testing:MediaPickerCaptureTests \
+            CODE_SIGNING_ALLOWED=NO
+        working-directory: example/ios
+      # The UI tests drive the real PHPicker, cropper and camera prompt. A
+      # Release build bundles its JS, so no Metro; the picks come from the
+      # sample photos every simulator ships with.
+      - name: Run UI tests
+        run: |
+          xcodebuild test \
+            -workspace MediaPickerExample.xcworkspace \
+            -scheme MediaPickerExample \
+            -configuration Release \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -only-testing:MediaPickerExampleUITests \
             CODE_SIGNING_ALLOWED=NO
         working-directory: example/ios

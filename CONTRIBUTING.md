@@ -57,16 +57,42 @@ yarn typecheck
 yarn test        # JS unit tests for src/index.ts, native module mocked
 ```
 
-CI (`.github/workflows/ci.yml`) runs these on every push to `main` and every pull request, then builds the
-example app and runs the Android instrumented tests on an emulator and the iOS `MediaPickerCaptureTests` on a
-simulator. The iOS UI tests below need Metro and a photo library, so they are run locally before a release.
+CI (`.github/workflows/ci.yml`) runs these on every push to `main` and every pull request, then runs every
+native suite below on an emulator and a simulator.
 
-Android instrumented tests, with an emulator booted:
+### Android
+
+With an emulator booted, from `example/android`:
 
 ```bash
-cd example/android
-./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest
+./gradlew :react-native-media-picker-kit:connectedDebugAndroidTest   # library tests
+./gradlew :app:connectedReleaseAndroidTest                           # UI tests
 ```
+
+- **Library tests** (`android/src/androidTest`) — compression on a real encoder, the call slot and temp-file
+  safety (`SafetyTest`), and the decisions each flow makes once a system screen returns (`FlowLogicTest`).
+- **UI tests** (`example/android/app/src/androidTest`) — drive the example app through the real photo
+  picker, cropper and camera, and check the JSON it renders. They run against the release build, so the JS is
+  bundled and no Metro is needed, and they write their own photos into MediaStore and remove them after, so
+  they do not depend on the device's gallery. The camera tests skip when the camera app does not label its
+  shutter.
+
+### iOS
+
+From `example/ios`. `-configuration Release` bundles the JS, so the UI tests need no Metro:
+
+```bash
+xcodebuild test -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample \
+  -configuration Release -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+```
+
+- **`MediaPickerExampleUITests`** — XCUITests that drive the real PHPicker, camera and cropper, picking from
+  the sample photos every simulator ships with.
+- **`MediaPickerCaptureTests`** — unit tests hosted by the app. A simulator renders a camera but has no
+  capture pipeline behind it, so its shutter never fires the delegate and everything the module does *after*
+  a shot is unreachable from a UI test. These call that delegate directly with the same info dictionaries
+  `UIImagePickerController` produces, which runs the real temp-file write, asset builder and crop hand-off.
+  They also cover crop sizing, image processing, the call slot and temp-file safety.
 
 ## Running the example
 
@@ -80,22 +106,6 @@ yarn android            # or: yarn ios  (cd ios && pod install first)
 
 It renders one button per test case and dumps the raw `PickerResult` JSON on screen, so every option can be
 exercised by hand.
-
-## iOS test targets
-
-Both run from one command:
-
-```bash
-cd example/ios
-xcodebuild test -workspace MediaPickerExample.xcworkspace -scheme MediaPickerExample \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
-```
-
-- **`MediaPickerExampleUITests`** — XCUITests that drive the real PHPicker, camera and cropper.
-- **`MediaPickerCaptureTests`** — unit tests hosted by the app. A simulator renders a camera but has no
-  capture pipeline behind it, so its shutter never fires the delegate and everything the module does *after*
-  a shot is unreachable from a UI test. These call that delegate directly with the same info dictionaries
-  `UIImagePickerController` produces, which runs the real temp-file write, asset builder and crop hand-off.
 
 ## Verification status
 

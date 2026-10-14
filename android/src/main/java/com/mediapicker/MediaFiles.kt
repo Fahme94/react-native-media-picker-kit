@@ -72,7 +72,10 @@ object MediaFiles {
   }
 
   fun extensionFor(mime: String, forceJpg: Boolean): String = when {
-    mime.startsWith("video/") -> mime.substringAfter('/').substringBefore(';').ifBlank { "mp4" }
+    // The platform's table rather than the MIME subtype, which is not always an
+    // extension: video/quicktime is a .mov and video/3gpp a .3gp.
+    mime.startsWith("video/") ->
+      MimeTypeMap.getSingleton().getExtensionFromMimeType(mime.substringBefore(';')) ?: "mp4"
     forceJpg -> "jpg"
     mime == "image/png" -> "png"
     mime == "image/webp" -> "webp"

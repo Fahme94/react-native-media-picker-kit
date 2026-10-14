@@ -28,6 +28,21 @@
 - (BOOL)claim:(void (^)(id))resolve options:(NSDictionary *)options;
 @end
 
+/// The helper classes, reached by name for the same reason as the module.
+@protocol MPKCropperProbe <NSObject>
++ (UIImage *)outputForCrop:(UIImage *)image options:(NSDictionary *)options;
+@end
+
+@protocol MPKImageProcessingProbe <NSObject>
++ (NSString *)processImageAtPath:(NSString *)path
+                         options:(NSDictionary *)options
+                            mime:(NSString **)mime;
+@end
+
+@protocol MPKResultsProbe <NSObject>
++ (NSDictionary *)successWithAssets:(NSArray *)assets deselected:(NSArray *)deselected;
+@end
+
 @interface CaptureDelegateTests : XCTestCase
 @end
 
@@ -570,6 +585,93 @@
 
   XCTAssertTrue([[NSFileManager defaultManager] fileExistsAtPath:victim]);
   [[NSFileManager defaultManager] removeItemAtPath:victim.stringByDeletingLastPathComponent error:nil];
+}
+
+#pragma mark - crop sizing
+
+- (Class<MPKCropperProbe>)cropper
+{
+  Class cropper = NSClassFromString(@"MPKCropper");
+  XCTAssertNotNil(cropper, @"MPKCropper is not linked into the host app");
+  return cropper;
+}
+
+/// An aspect-locked crop with a size is resized to exactly that size, as on
+/// Android, whatever the crop the user drew.
+- (void)testALockedCropIsResizedExactly
+{
+  UIImage *out = [[self cropper] outputForCrop:[self imageOfSize:CGSizeMake(2000, 1000)]
+                                       options:@{@"cropWidth": @500, @"cropHeight": @500}];
+  XCTAssertEqual(out.size.width * out.scale, 500);
+  XCTAssertEqual(out.size.height * out.scale, 500);
+}
+
+/// A free-style crop fits inside the size instead, so it is never stretched.
+- (void)testAFreeStyleCropFitsInsideWithoutStretching
+{
+  UIImage *out = [[self cropper] outputForCrop:[self imageOfSize:CGSizeMake(2000, 1000)]
+                                       options:@{@"cropWidth": @500, @"cropHeight": @500,
+                                                 @"freeStyleCropEnabled": @YES}];
+  XCTAssertEqual(out.size.width * out.scale, 500);
+  XCTAssertEqual(out.size.height * out.scale, 250);
+}
+
+- (void)testACropWithoutASizeIsLeftAtTheSizeDrawn
+{
+  UIImage *image = [self imageOfSize:CGSizeMake(640, 480)];
+  XCTAssertEqual([[self cropper] outputForCrop:image options:@{}], image);
+}
+
+#pragma mark - image processing
+
+- (NSString *)writePNGOfSize:(CGSize)size
+{
+  NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"rn_media_picker/%@.png", [NSUUID UUID].UUIDString]];
+  [[NSFileManager defaultManager] createDirectoryAtPath:path.stringByDeletingLastPathComponent
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+  XCTAssertTrue([UIImagePNGRepresentation([self imageOfSize:size]) writeToFile:path atomically:YES]);
+  return path;
+}
+
+- (void)testAPngIsReencodedAsJpegByDefault
+{
+  Class<MPKImageProcessingProbe> processing = NSClassFromString(@"MPKImageProcessing");
+  NSString *png = [self writePNGOfSize:CGSizeMake(300, 200)];
+  NSString *mime = @"image/png";
+
+  NSString *out = [processing processImageAtPath:png options:@{} mime:&mime];
+
+  XCTAssertEqualObjects(out.pathExtension, @"jpg");
+  XCTAssertEqualObjects(mime, @"image/jpeg");
+  XCTAssertFalse([[NSFileManager defaultManager] fileExistsAtPath:png],
+                 @"the replaced PNG was left behind");
+}
+
+- (void)testAPngIsLeftAloneWhenForceJpgIsOff
+{
+  Class<MPKImageProcessingProbe> processing = NSClassFromString(@"MPKImageProcessing");
+  NSString *png = [self writePNGOfSize:CGSizeMake(300, 200)];
+  NSString *mime = @"image/png";
+
+  NSString *out = [processing processImageAtPath:png options:@{@"forceJpg": @NO} mime:&mime];
+
+  XCTAssertEqualObjects(out, png);
+  XCTAssertEqualObjects(mime, @"image/png");
+}
+
+#pragma mark - result shape
+
+/// `deselected` only belongs to a pick that sent `preselected`; JS fills in an
+/// empty one for every other call.
+- (void)testDeselectedIsOnlyReportedWhenThereIsOne
+{
+  Class<MPKResultsProbe> results = NSClassFromString(@"MPKResults");
+
+  XCTAssertNil([results successWithAssets:@[] deselected:nil][@"deselected"]);
+  XCTAssertEqualObjects([results successWithAssets:@[] deselected:@[@"a"]][@"deselected"], @[@"a"]);
 }
 
 @end

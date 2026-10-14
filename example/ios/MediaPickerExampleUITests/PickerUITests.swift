@@ -43,10 +43,12 @@ final class PickerUITests: XCTestCase {
       if app.state == .runningForeground {
         // The JSON shows up both as its own static text and inside the label of
         // the container that wraps it, so check both rather than assume one.
+        // Matched by predicate rather than walked by index: React Native
+        // re-renders while this polls, and an index taken a moment earlier can
+        // point past the end of the list by the time it is read.
         for query in [app.staticTexts, app.otherElements] {
-          for element in query.allElementsBoundByIndex where element.label.contains(needle) {
-            return element.label
-          }
+          let match = query.matching(NSPredicate(format: "label CONTAINS %@", needle)).firstMatch
+          if match.exists { return match.label }
         }
       }
       usleep(500_000)
