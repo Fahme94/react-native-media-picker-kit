@@ -155,6 +155,24 @@ export interface CompressProgress {
 }
 
 /**
+ * The steps a picked or recorded video goes through before compression:
+ * `loading` copies it out of the photo library (downloading it from iCloud
+ * first when it is not on the device), `converting` rewraps QuickTime as MP4.
+ */
+export type ProcessStage = 'loading' | 'converting';
+
+/** Reported while a video is being loaded or converted. iOS only. */
+export interface ProcessProgress {
+  stage: ProcessStage;
+  /** 0..1 for this stage of the asset. Starts again from 0 on the next stage. */
+  progress: number;
+  /** Which asset of the batch this is, from 0. */
+  index: number;
+  /** How many assets are in this call. */
+  total: number;
+}
+
+/**
  * What `compressMedia` accepts. Deliberately narrower than PickerOptions: only
  * the byte budgets apply, so a file already under budget always comes back
  * untouched. The image-output options belong to picking.

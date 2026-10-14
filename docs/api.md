@@ -1,7 +1,7 @@
 # API reference
 
-Seven exports. The ones that do work are promise-returning and none of them ever reject; each
-resolves with a [`PickerResult`](#pickerresult). The other two subscribe to progress and stop work
+Eight exports. The ones that do work are promise-returning and none of them ever reject; each
+resolves with a [`PickerResult`](#pickerresult). The other three subscribe to progress and stop work
 in flight.
 
 ```ts
@@ -11,6 +11,7 @@ import {
   cropImage,
   compressMedia,
   addCompressProgressListener,
+  addProcessProgressListener,
   cancelCompression,
   cleanTempFiles,
 } from 'react-native-media-picker-kit';
@@ -113,6 +114,32 @@ useEffect(() => {
 **Only video reports progress.** Images finish too quickly for it to mean anything, so a call that
 compresses no video emits nothing. It is a module-wide subscription rather than a per-call callback,
 so subscribe once where you show the spinner. See [Compression](compression.md#progress).
+
+### addProcessProgressListener(listener)
+
+iOS only. Reports the steps a video goes through before compression: copying it out of the photo
+library, which includes downloading the original when it only lives in iCloud, and rewrapping a
+QuickTime clip as MP4. Returns a subscription; call `remove()` when you are done with it.
+
+```ts
+useEffect(() => {
+  const sub = addProcessProgressListener(({ stage, progress }) => {
+    setLabel(`${stage === 'loading' ? 'Loading' : 'Converting'}: ${Math.round(progress * 100)}%`);
+  });
+  return () => sub.remove();
+}, []);
+```
+
+| Field | Type | |
+| --- | --- | --- |
+| `stage` | `'loading' \| 'converting'` | `loading` copies from the library, `converting` rewraps as MP4 |
+| `progress` | `number` | `0..1` for this stage of the asset. Starts again from `0` on the next stage |
+| `index` | `number` | Which asset of the batch, from `0` |
+| `total` | `number` | How many assets are in this call |
+
+Each stage counts from `0` to `1` on its own, then compression reports from `0` on
+`addCompressProgressListener`. Photos do not report, and Android emits nothing on this event. See
+[Compression](compression.md#before-compression-ios).
 
 ### cancelCompression()
 

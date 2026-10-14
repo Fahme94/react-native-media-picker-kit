@@ -7,6 +7,8 @@ import type {
   CompressProgress,
   PickerOptions,
   PickerResult,
+  ProcessProgress,
+  ProcessStage,
 } from './types';
 
 export * from './types';
@@ -267,6 +269,22 @@ export function addCompressProgressListener(listener: (event: CompressProgress) 
 }
 
 /**
+ * Subscribe to the steps before compression: copying a picked video out of the
+ * photo library (`stage: 'loading'`, which includes any iCloud download) and
+ * rewrapping QuickTime as MP4 (`stage: 'converting'`). iOS only; Android does not
+ * report these steps.
+ *
+ * Returns a subscription; call `remove()` when you are done with it.
+ */
+export function addProcessProgressListener(listener: (event: ProcessProgress) => void): {
+  remove(): void;
+} {
+  return NativeMediaPicker.onProcessProgress(({ stage, progress, index, total }) =>
+    listener({ stage: stage as ProcessStage, progress, index, total })
+  );
+}
+
+/**
  * Stop video compression that is currently running. Safe to call when nothing
  * is running — it does nothing.
  *
@@ -294,4 +312,6 @@ export type {
   CompressProgress,
   PickerOptions,
   PickerResult,
+  ProcessProgress,
+  ProcessStage,
 };

@@ -15,8 +15,11 @@ NS_ASSUME_NONNULL_BEGIN
                                  deselected:(NSArray<NSString *> *_Nonnull *_Nonnull)deselected;
 
 /// Copies one pick out of the picker's short-lived URL into the temp directory.
-/// `path` is nil on failure, with `error` saying why.
+/// `path` is nil on failure, with `error` saying why. `progress` follows the
+/// library's own load, which includes downloading the original from iCloud.
+/// Videos only.
 + (void)copyResult:(PHPickerResult *)result
+          progress:(nullable void (^)(double fraction))progress
         completion:(void (^)(NSString *_Nullable path,
                              NSString *_Nullable fileName,
                              BOOL isVideo,

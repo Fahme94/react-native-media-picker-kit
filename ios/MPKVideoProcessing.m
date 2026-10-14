@@ -92,7 +92,7 @@ static const CGFloat kSizeSafetyMargin = 0.90;
   return nil;
 }
 
-+ (NSString *)mp4AtPath:(NSString *)path
++ (NSString *)mp4AtPath:(NSString *)path progress:(nullable void (^)(double))progress
 {
   if ([path.pathExtension.lowercaseString isEqualToString:@"mp4"]) return path;
 
@@ -108,11 +108,17 @@ static const CGFloat kSizeSafetyMargin = 0.90;
 
   // Every caller is already off the main thread, and a passthrough copy only
   // moves bytes, so waiting here is cheaper than threading a callback through.
+  // The session's progress has no callback either, so it is read while waiting.
   dispatch_semaphore_t done = dispatch_semaphore_create(0);
   [session exportAsynchronouslyWithCompletionHandler:^{
     dispatch_semaphore_signal(done);
   }];
-  dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+  double reported = -1;
+  while (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)) != 0) {
+    if (progress == nil || session.progress - reported < 0.01) continue;
+    reported = session.progress;
+    progress(reported);
+  }
 
   if (session.status != AVAssetExportSessionStatusCompleted) {
     [[NSFileManager defaultManager] removeItemAtPath:output error:nil];

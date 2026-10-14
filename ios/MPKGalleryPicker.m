@@ -69,14 +69,36 @@
 }
 
 + (void)copyResult:(PHPickerResult *)result
+          progress:(nullable void (^)(double))progress
         completion:(void (^)(NSString *_Nullable, NSString *_Nullable, BOOL, NSString *_Nullable))completion
 {
   NSItemProvider *provider = result.itemProvider;
   BOOL isVideo = [provider hasItemConformingToTypeIdentifier:UTTypeMovie.identifier];
   NSString *typeIdentifier = isVideo ? UTTypeMovie.identifier : UTTypeImage.identifier;
 
-  [provider loadFileRepresentationForTypeIdentifier:typeIdentifier
-                                  completionHandler:^(NSURL *url, NSError *error) {
+  // The load hands back an NSProgress but no callback for it, so it is read on a
+  // timer. The timer is running before the load starts, and the load stops it,
+  // so a load that finishes at once never leaves it behind. Only video is
+  // reported: a photo loads too fast for progress to mean anything.
+  __block NSProgress *loading = nil;
+  dispatch_source_t timer = nil;
+  if (progress != nil && isVideo) {
+    timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    __block double reported = -1;
+    dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC, 20 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(timer, ^{
+      double fraction = loading.fractionCompleted;
+      if (loading == nil || fraction - reported < 0.01) return;
+      reported = fraction;
+      progress(MIN(fraction, 1.0));
+    });
+    dispatch_resume(timer);
+  }
+
+  loading = [provider loadFileRepresentationForTypeIdentifier:typeIdentifier
+                                            completionHandler:^(NSURL *url, NSError *error) {
+    if (timer != nil) dispatch_source_cancel(timer);
     if (url == nil) {
       completion(nil, nil, isVideo, error.localizedDescription ?: @"Asset could not be loaded");
       return;

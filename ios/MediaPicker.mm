@@ -352,6 +352,9 @@ RCT_EXPORT_MODULE()
            completion:(void (^)(NSDictionary *asset, NSString *code, NSString *error))completion
 {
   [MPKGalleryPicker copyResult:result
+                      progress:^(double p) {
+    [self reportProcessStage:@"loading" progress:p index:index total:total];
+  }
                     completion:^(NSString *path, NSString *fileName, BOOL isVideo, NSString *error) {
     if (path == nil) {
       completion(nil, MPKErrorCannotProcessAsset, error);
@@ -545,7 +548,9 @@ RCT_EXPORT_MODULE()
     return nil;
   }
   // A transcode already wrote MP4; a clip it left alone may still be QuickTime.
-  compressed = [MPKVideoProcessing mp4AtPath:compressed];
+  compressed = [MPKVideoProcessing mp4AtPath:compressed progress:^(double p) {
+    [self reportProcessStage:@"converting" progress:p index:index total:total];
+  }];
 
   // Every reported dimension, duration and bitrate has to describe the file the
   // caller is handed, so they are all read after compression rather than before.
@@ -621,6 +626,21 @@ RCT_EXPORT_MODULE()
 {
   if (!_eventEmitterCallback) return;
   [self emitOnCompressProgress:@{
+    @"progress": @(progress),
+    @"index": @(index),
+    @"total": @(total)
+  }];
+}
+
+/// Same guard as reportProgress, for the steps before compression.
+- (void)reportProcessStage:(NSString *)stage
+                  progress:(double)progress
+                     index:(NSUInteger)index
+                     total:(NSUInteger)total
+{
+  if (!_eventEmitterCallback) return;
+  [self emitOnProcessProgress:@{
+    @"stage": stage,
     @"progress": @(progress),
     @"index": @(index),
     @"total": @(total)

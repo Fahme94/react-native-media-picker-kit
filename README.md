@@ -36,6 +36,7 @@ Recorded from the [example app](example), which has a button for every option.
 | Resize and re-encode (`maxWidth`, `maxHeight`, `quality`, `forceJpg`) | ✓ | ✓ | [Picking](docs/picking.md#resize-and-re-encode-on-the-way-out) |
 | Compress images and video to a file size<sup>2</sup> | ✓ | ✓ | [Compression](docs/compression.md) |
 | Video compression progress and cancel | ✓ | ✓ | [Compression](docs/compression.md) |
+| Progress while a video loads from the library (iCloud included) and converts to MP4 | ✓ | No | [Compression](docs/compression.md#before-compression-ios) |
 | Reopen the gallery with earlier picks ticked | ✓ | Android 16<sup>3</sup> | [Keeping earlier picks selected](docs/preselection.md) |
 | EXIF | Full | Common tags | [Metadata](docs/metadata.md#includeexif) |
 | Base64 | ✓ | ✓ | [Metadata](docs/metadata.md#includebase64) |
@@ -136,7 +137,7 @@ Reflects the behaviour these libraries document and that this package was built 
 
 ## Documentation
 
-- [**API reference**](docs/api.md): every option, the `Asset` shape, error codes, and all seven exports.
+- [**API reference**](docs/api.md): every option, the `Asset` shape, error codes, and all eight exports.
 - [Picking](docs/picking.md): one or many, photos and video, resizing, and what comes back.
 - [Camera](docs/camera.md): photos, video, the front camera, and the one permission iOS needs.
 - [Cropping](docs/cropping.md): sizing, free-form vs aspect-locked, and what the cropper can't do.

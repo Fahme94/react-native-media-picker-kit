@@ -37,6 +37,9 @@ The API is now stable. Nothing a caller uses changes from 0.2.2 apart from the o
 
 ### Added
 
+- `addProcessProgressListener`: progress for the steps before compression on iOS, copying a picked video
+  out of the photo library (`stage: 'loading'`, iCloud download included) and rewrapping it as MP4
+  (`stage: 'converting'`). See [Progress](docs/compression.md#before-compression-ios).
 - Supported versions table in the README, and a guide per feature under `docs/`, with recordings.
 - CI on every pull request: lint, type check and JS tests, then the native test suites on an Android
   emulator and an iOS simulator.

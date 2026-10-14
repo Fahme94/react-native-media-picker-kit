@@ -1,6 +1,7 @@
 import NativeMediaPicker from '../NativeMediaPicker';
 import {
   addCompressProgressListener,
+  addProcessProgressListener,
   CameraType,
   cancelCompression,
   captureMedia,
@@ -21,6 +22,7 @@ jest.mock('../NativeMediaPicker', () => ({
     cropImage: jest.fn(),
     compressMedia: jest.fn(),
     onCompressProgress: jest.fn(),
+    onProcessProgress: jest.fn(),
     cancelCompression: jest.fn(),
     cleanTempFiles: jest.fn(),
   },
@@ -303,5 +305,19 @@ describe('constants', () => {
     expect(MediaType).toEqual({ photo: 'photo', video: 'video', mixed: 'mixed' });
     expect(CameraType).toEqual({ back: 'back', front: 'front' });
     expect(VideoQuality).toEqual({ low: 'low', high: 'high' });
+  });
+});
+
+describe('addProcessProgressListener', () => {
+  it('hands each native event to the listener and returns the subscription', () => {
+    const subscription = { remove: jest.fn() };
+    (native.onProcessProgress as jest.Mock).mockReturnValue(subscription);
+    const listener = jest.fn();
+
+    expect(addProcessProgressListener(listener)).toBe(subscription);
+
+    const [forward] = (native.onProcessProgress as jest.Mock).mock.calls[0];
+    forward({ stage: 'converting', progress: 0.5, index: 0, total: 1 });
+    expect(listener).toHaveBeenCalledWith({ stage: 'converting', progress: 0.5, index: 0, total: 1 });
   });
 });
