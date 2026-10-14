@@ -92,6 +92,36 @@ static const CGFloat kSizeSafetyMargin = 0.90;
   return nil;
 }
 
++ (NSString *)mp4AtPath:(NSString *)path
+{
+  if ([path.pathExtension.lowercaseString isEqualToString:@"mp4"]) return path;
+
+  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
+  AVAssetExportSession *session =
+      [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetPassthrough];
+  if (![session.supportedFileTypes containsObject:AVFileTypeMPEG4]) return path;
+
+  NSString *output = [MPKMediaFiles tempPathWithExtension:@"mp4"];
+  session.outputURL = [NSURL fileURLWithPath:output];
+  session.outputFileType = AVFileTypeMPEG4;
+  session.shouldOptimizeForNetworkUse = YES;
+
+  // Every caller is already off the main thread, and a passthrough copy only
+  // moves bytes, so waiting here is cheaper than threading a callback through.
+  dispatch_semaphore_t done = dispatch_semaphore_create(0);
+  [session exportAsynchronouslyWithCompletionHandler:^{
+    dispatch_semaphore_signal(done);
+  }];
+  dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+
+  if (session.status != AVAssetExportSessionStatusCompleted) {
+    [[NSFileManager defaultManager] removeItemAtPath:output error:nil];
+    return path;
+  }
+  [MPKMediaFiles removeIfTemporary:path];
+  return output;
+}
+
 + (nullable NSString *)transcodeAsset:(AVURLAsset *)asset
                                 video:(AVAssetTrack *)videoTrack
                               seconds:(Float64)seconds

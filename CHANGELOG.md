@@ -28,6 +28,10 @@ The API is now stable. Nothing a caller uses changes from 0.2.2 apart from the o
 
 ### Changed
 
+- iOS: videos come back as MP4 (`video/mp4`, `.mp4`), picked or recorded. The camera and most library
+  clips are QuickTime `.mov`, which was handed over untouched whenever no transcode ran, and many upload
+  services refuse it. The clip is rewrapped without re-encoding, so quality and size stay the same; one
+  whose tracks an MP4 cannot hold is still returned as it was. `compressMedia` is unchanged.
 - The native code on both platforms is split into one file per job (picker, camera, cropper, image and
   video processing, files, results). See [Code layout](CONTRIBUTING.md#code-layout).
 

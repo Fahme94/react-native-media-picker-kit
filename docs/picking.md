@@ -81,3 +81,4 @@ Files stay in the cache until you remove them. See [Temp files](temp-files.md).
 | Unlimited (`selectionLimit: 0`) | No cap | Capped at 100 by the photo picker |
 | `restrictMimeTypes` | Ignored | Narrows the document picker fallback, e.g. `['image/jpeg']` |
 | `presentationStyle` | `pageSheet`, `fullScreen` and the other `UIModalPresentationStyle`s | Ignored |
+| Video container | Always MP4: a QuickTime `.mov` is rewrapped without re-encoding | As the file is |

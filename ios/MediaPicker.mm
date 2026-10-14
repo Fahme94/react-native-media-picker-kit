@@ -544,6 +544,8 @@ RCT_EXPORT_MODULE()
     *compressionError = @"Could not compress the video below maxVideoFileSize";
     return nil;
   }
+  // A transcode already wrote MP4; a clip it left alone may still be QuickTime.
+  compressed = [MPKVideoProcessing mp4AtPath:compressed];
 
   // Every reported dimension, duration and bitrate has to describe the file the
   // caller is handed, so they are all read after compression rather than before.

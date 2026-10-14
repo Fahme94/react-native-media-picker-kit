@@ -248,7 +248,9 @@
 
   NSDictionary *asset = [self onlyAssetOf:result];
   [self assertFileBackedAsset:asset];
-  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+  // The camera records QuickTime; it comes back rewrapped as MP4.
+  XCTAssertEqualObjects(asset[@"type"], @"video/mp4");
+  XCTAssertTrue([asset[@"fileName"] hasSuffix:@".mp4"], @"the name must follow the bytes");
   XCTAssertEqualObjects(asset[@"width"], @320);
   XCTAssertEqualObjects(asset[@"height"], @240);
   XCTAssertEqualWithAccuracy([asset[@"duration"] doubleValue], 1000.0, 100.0,
@@ -391,9 +393,12 @@
   [self assertFileBackedAsset:asset];
   XCTAssertEqualObjects(asset[@"compressionSkipped"], @"cancelled",
                         @"a cancel must say why the file is still over budget");
-  XCTAssertEqualObjects(asset[@"fileSize"], @(src), @"cancel should hand back the original");
-  // Untouched means not transcoded, so it is still the QuickTime copy.
-  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+  // Rewrapping as MP4 changes only the container, so the size barely moves and
+  // the frame keeps the size a transcode to a quarter of the bytes would not.
+  XCTAssertEqualWithAccuracy([asset[@"fileSize"] doubleValue], (double)src, src * 0.05,
+                             @"cancel should hand back the original");
+  XCTAssertEqualObjects(asset[@"width"], @1280);
+  XCTAssertEqualObjects(asset[@"type"], @"video/mp4");
 }
 
 /// A call turned away as busy is not a new batch, so it must not wipe out a
@@ -449,13 +454,14 @@
 
   NSDictionary *asset = [self onlyAssetOf:result];
   [self assertFileBackedAsset:asset];
-  XCTAssertEqualObjects(asset[@"fileSize"], @(src), @"the floor should have skipped the transcode");
+  XCTAssertEqualWithAccuracy([asset[@"fileSize"] doubleValue], (double)src, src * 0.05,
+                             @"the floor should have skipped the transcode");
+  XCTAssertEqualObjects(asset[@"width"], @1280);
   XCTAssertGreaterThan([asset[@"fileSize"] unsignedLongLongValue], src / 2,
                        @"this only means anything if it was over budget");
   XCTAssertEqualObjects(asset[@"compressionSkipped"], @"below_minimum",
                         @"the caller has to be told why this file is over budget");
-  // Untouched means not transcoded, so it is still the QuickTime copy.
-  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+  XCTAssertEqualObjects(asset[@"type"], @"video/mp4");
 }
 
 /// A floor below the file must not stop real work happening.
@@ -526,8 +532,8 @@
 
   NSDictionary *asset = [self onlyAssetOf:result];
   [self assertFileBackedAsset:asset];
-  // Untouched means not transcoded, so it is still the QuickTime copy.
-  XCTAssertEqualObjects(asset[@"type"], @"video/quicktime");
+  // Not transcoded, only rewrapped: same frame, MP4 container.
+  XCTAssertEqualObjects(asset[@"type"], @"video/mp4");
   XCTAssertEqualObjects(asset[@"width"], @320);
 }
 

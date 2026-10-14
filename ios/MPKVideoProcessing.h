@@ -19,6 +19,12 @@ NS_ASSUME_NONNULL_BEGIN
                                   progress:(nullable void (^)(double))progress
                                isCancelled:(BOOL (^)(void))isCancelled;
 
+/// Rewrap a clip as MP4 without re-encoding it. iOS records and exports
+/// QuickTime, which most upload services refuse even though the H.264/HEVC and
+/// AAC tracks inside it are exactly what MP4 carries. Returns the original when
+/// it already is MP4, or when its tracks cannot go into an MP4 container.
++ (NSString *)mp4AtPath:(NSString *)path;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -31,6 +31,9 @@ const result = await captureMedia({
 });
 ```
 
+The recording comes back as MP4 on both platforms. iOS records QuickTime, so the clip is rewrapped as
+`.mp4` on the way out, without re-encoding it.
+
 `mediaType: 'mixed'` is rejected with `invalid_options`. Android has one camera action for photos and
 another for video, with nothing that offers both, so it cannot behave the same on both platforms.
 
