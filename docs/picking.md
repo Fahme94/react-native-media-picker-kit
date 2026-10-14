@@ -33,7 +33,10 @@ await pickMedia({ mediaType: MediaType.video });
 await pickMedia({ mediaType: MediaType.mixed, selectionLimit: 0 }); // 0 = unlimited
 ```
 
-Assets come back **in the order the user picked them**, on both platforms.
+Assets come back **in the order the user picked them**, on both platforms. On
+Android this needs a photo picker from SDK extension R-12 or later, which Play
+system updates bring to Android 11 and up; an older picker returns the
+selection in its own order.
 
 ## Resize and re-encode on the way out
 

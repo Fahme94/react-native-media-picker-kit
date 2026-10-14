@@ -22,6 +22,10 @@ internal class GalleryPicker(private val context: Context) {
     // Play system updates bring to Android 11+, not only to Android 16.
     private const val EXTRA_PRE_SELECTION_URIS = "android.provider.extra.PICKER_PRE_SELECTION_URIS"
     private const val PRE_SELECTION_EXTENSION_VERSION = 15
+    // MediaStore.EXTRA_PICK_IMAGES_IN_ORDER, from SDK extension R-12. Without it
+    // the picker is free to return a multi-selection in grid order rather than
+    // the order it was tapped, and older picker versions do.
+    private const val EXTRA_PICK_IN_ORDER = "android.provider.extra.PICK_IMAGES_IN_ORDER"
   }
 
   /**
@@ -81,6 +85,8 @@ internal class GalleryPicker(private val context: Context) {
       } else {
         val max = if (limit <= 0) UNLIMITED_CAP else limit
         ActivityResultContracts.PickMultipleVisualMedia(max).createIntent(activity, request).apply {
+          // A picker too old to know the extra ignores it.
+          putExtra(EXTRA_PICK_IN_ORDER, true)
           if (plan.shown.isNotEmpty()) {
             putParcelableArrayListExtra(
               EXTRA_PRE_SELECTION_URIS,

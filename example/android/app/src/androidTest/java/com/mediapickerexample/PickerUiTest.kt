@@ -192,6 +192,11 @@ class PickerUiTest {
 
   @Test
   fun multiSelectKeepsTheOrderThePhotosWerePicked() {
+    assumeTrue(
+      "the photo picker gained ordered selection in SDK extension R-12",
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+        SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 12
+    )
     val identifiers = mutableListOf<String>()
     var previous: String? = null
     for (cell in 0..2) {

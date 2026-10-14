@@ -17,6 +17,8 @@ The API is now stable. Nothing a caller uses changes from 0.2.2 apart from the o
 
 - Several photos picked at once on iOS now come back in the order the user tapped them, not the order they
   finished loading.
+- Android: several photos picked at once come back in the order the user tapped them on every photo picker
+  that supports ordered selection (SDK extension R-12), not only on the ones that kept that order by default.
 - A second call made while a picker is still settling can no longer resolve the first call's promise, on
   either platform.
 - `cleanTempFiles(path)` refuses any path outside the module's own temp directory, including one that
