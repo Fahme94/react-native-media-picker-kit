@@ -135,6 +135,8 @@ The option and result shapes are a merge of the two libraries most people reach 
 
 Reflects the behaviour these libraries document and that this package was built to reconcile — verify against their current releases before relying on a row.
 
+Coming from react-native-image-crop-picker? The [migration guide](docs/migrating-from-image-crop-picker.md) maps every function, option and result field.
+
 ## Documentation
 
 - [**API reference**](docs/api.md): every option, the `Asset` shape, error codes, and all eight exports.
@@ -147,12 +149,13 @@ Reflects the behaviour these libraries document and that this package was built 
 - [Permissions](docs/permissions.md): why the gallery needs none, and the one camera key that isn't optional.
 - [Expo](docs/expo.md): the bundled config plugin and development builds.
 - [Temp files](docs/temp-files.md): where assets live and how to clean them up.
+- [Migrating from react-native-image-crop-picker](docs/migrating-from-image-crop-picker.md): the function, option and result renames, and what to remove afterwards.
 - [Troubleshooting](docs/troubleshooting.md): autolinking, older Android, and the Xcode `fmt` build failure.
 - [Example app](example): a runnable project with a button per option.
 - [Changelog](CHANGELOG.md): what changed in each release.
 - [Contributing](CONTRIBUTING.md): code layout, running the tests, and releasing.
 
-[Report a bug](https://github.com/Fahme94/react-native-media-picker/issues)
+[Report a bug](https://github.com/Fahme94/react-native-media-picker-kit/issues)
 
 ## License
 

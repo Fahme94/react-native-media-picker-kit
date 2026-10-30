@@ -2,13 +2,13 @@
   "name": "react-native-media-picker-kit",
   "version": "1.0.0",
   "description": "Pick or capture photos and videos, with built-in cropping and compression to a target file size. No gallery permission needed. New Architecture only.",
-  "homepage": "https://github.com/Fahme94/react-native-media-picker#readme",
+  "homepage": "https://github.com/Fahme94/react-native-media-picker-kit#readme",
   "bugs": {
-    "url": "https://github.com/Fahme94/react-native-media-picker/issues"
+    "url": "https://github.com/Fahme94/react-native-media-picker-kit/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Fahme94/react-native-media-picker.git"
+    "url": "git+https://github.com/Fahme94/react-native-media-picker-kit.git"
   },
   "author": "Ahmed Fahmy <13001300+Fahme94@users.noreply.github.com>",
   "main": "lib/commonjs/index.js",

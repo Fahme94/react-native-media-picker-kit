@@ -78,5 +78,5 @@ rather than hanging. Test camera capture on a physical device.
 ## The promise never settles
 
 It should not be possible — every path resolves, including cancels and errors. If you hit one,
-please [open an issue](https://github.com/Fahme94/react-native-media-picker/issues) with the options
+please [open an issue](https://github.com/Fahme94/react-native-media-picker-kit/issues) with the options
 you passed and the platform.

@@ -206,7 +206,7 @@ which npm invokes before packing, so a stale `lib` can't be published.
    doing once:
 
    ```bash
-   sed -i '' 's|src="docs/media/|src="https://raw.githubusercontent.com/Fahme94/react-native-media-picker/main/docs/media/|' README.md
+   sed -i '' 's|src="docs/media/|src="https://raw.githubusercontent.com/Fahme94/react-native-media-picker-kit/main/docs/media/|' README.md
    ```
 
 4. Pack, publish and tag:
