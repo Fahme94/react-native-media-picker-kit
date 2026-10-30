@@ -4,6 +4,20 @@ All notable changes to this package. The format follows [Keep a Changelog](https
 and from 1.0.0 the package follows [Semantic Versioning](https://semver.org/): option names, result fields
 and error codes only change in a major version.
 
+## [1.0.1] - 2026-10-30
+
+Documentation and package metadata only. No code changes.
+
+### Added
+
+- A [migration guide from react-native-image-crop-picker](docs/migrating-from-image-crop-picker.md) that maps
+  every function, option and result field.
+
+### Fixed
+
+- The npm page, the podspec and the docs linked to the repository's old name. They now point at
+  `Fahme94/react-native-media-picker-kit`.
+
 ## [1.0.0] - 2026-10-14
 
 The API is now stable. Nothing a caller uses changes from 0.2.2 apart from the one removal below.
@@ -92,6 +106,7 @@ The API is now stable. Nothing a caller uses changes from 0.2.2 apart from the o
 
 First release: `pickMedia`, `captureMedia`, `cropImage` and `cleanTempFiles`, with the Expo config plugin.
 
+[1.0.1]: https://github.com/Fahme94/react-native-media-picker-kit/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Fahme94/react-native-media-picker-kit/compare/v0.2.2...v1.0.0
 [0.2.2]: https://github.com/Fahme94/react-native-media-picker-kit/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Fahme94/react-native-media-picker-kit/compare/v0.2.0...v0.2.1
